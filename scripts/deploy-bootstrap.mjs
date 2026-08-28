@@ -322,6 +322,18 @@ async function vercel() {
   if (!token) die("VERCEL_TOKEN is not set.", "Create one at https://vercel.com/account/tokens");
   const teamQ = process.env.VERCEL_TEAM_ID ? `?teamId=${process.env.VERCEL_TEAM_ID}` : "";
 
+  // With `--skip github` — which is how CI runs this, since the repo already
+  // exists — nothing has populated state.repo. Actions sets GITHUB_REPOSITORY
+  // to "owner/name", which is the same value the github step would have saved.
+  const repoSlug = state.repo || process.env.GITHUB_REPOSITORY;
+  if (!repoSlug) {
+    die(
+      "Don't know which GitHub repo to link to Vercel.",
+      "Run without `--skip github`, or set GITHUB_REPOSITORY=owner/name.",
+    );
+  }
+  const repoOwner = state.owner || repoSlug.split("/")[0];
+
   const existing = await api(`${VERCEL_API}/v9/projects/${NAME}${teamQ}`, { token });
   let project;
   if (existing.res.ok) {
@@ -334,7 +346,7 @@ async function vercel() {
       body: {
         name: NAME,
         framework: "nextjs",
-        gitRepository: { type: "github", repo: state.repo },
+        gitRepository: { type: "github", repo: repoSlug },
       },
     });
     if (!created.res.ok) {
@@ -400,7 +412,7 @@ async function vercel() {
       target: "production",
       gitSource: repoId
         ? { type: "github", repoId, ref: "main" }
-        : { type: "github", org: state.owner, repo: NAME, ref: "main" },
+        : { type: "github", org: repoOwner, repo: NAME, ref: "main" },
     },
   });
   if (!dep.res.ok) {

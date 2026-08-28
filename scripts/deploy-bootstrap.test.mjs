@@ -83,7 +83,7 @@ function startMock() {
 }
 
 /** Runs the real script against the mock; returns its output, state and requests. */
-function run() {
+function run({ skip = "push,migrate,seed,verify", env = {} } = {}) {
   requests = [];
   const stateFile = join(scratch, `state-${++runNo}.json`);
   return new Promise((resolve) => {
@@ -99,7 +99,7 @@ function run() {
         // database, a live deployment — and push would rewrite this repo's own
         // origin. The API calls around them are what this covers.
         "--skip",
-        "push,migrate,seed,verify",
+        skip,
       ],
       {
         encoding: "utf8",
@@ -111,6 +111,9 @@ function run() {
           NEON_API_KEY: "neon-test",
           GITHUB_TOKEN: "gh-test",
           VERCEL_TOKEN: "vc-test",
+          // Actions sets this; locally it must not leak in from the parent.
+          GITHUB_REPOSITORY: "",
+          ...env,
         },
         timeout: 60000,
       },
@@ -129,6 +132,8 @@ function run() {
 // assertions below only read the captured result.
 let both;
 let directOnly;
+let ciRun;
+let noRepo;
 
 beforeAll(async () => {
   server = startMock();
@@ -141,7 +146,18 @@ beforeAll(async () => {
 
   neonUris = [DIRECT];
   directOnly = await run();
-}, 90000);
+
+  // How .github/workflows/deploy-bootstrap.yml invokes it: the repo already
+  // exists, so the github step is skipped and the slug comes from Actions.
+  neonUris = [DIRECT, POOLED];
+  ciRun = await run({
+    skip: "github,push,migrate,seed,verify",
+    env: { GITHUB_REPOSITORY: "testuser/trading-journal" },
+  });
+
+  // Same, but with nothing to derive the slug from.
+  noRepo = await run({ skip: "github,push,migrate,seed,verify" });
+}, 120000);
 
 afterAll(() => {
   server?.close();
@@ -252,6 +268,30 @@ describe("vercel", () => {
       target: "production",
       gitSource: { type: "github", repoId: 998877, ref: "main" },
     });
+  });
+});
+
+describe("CI path (--skip github, as the deploy workflow runs it)", () => {
+  it("links Vercel to the repo derived from GITHUB_REPOSITORY", () => {
+    // Without this the workflow sends `repo: undefined` and Vercel creates an
+    // unlinked project that never deploys on push.
+    expect(find(ciRun.requests, "POST", "/v11/projects")?.body.gitRepository).toEqual({
+      type: "github",
+      repo: "testuser/trading-journal",
+    });
+  });
+
+  it("still creates no GitHub repo", () => {
+    expect(find(ciRun.requests, "POST", "/user/repos")).toBeUndefined();
+  });
+
+  it("still sets all three env vars", () => {
+    expect(envPosts(ciRun.requests)).toHaveLength(3);
+  });
+
+  it("fails loudly when the repo slug cannot be determined", () => {
+    expect(find(noRepo.requests, "POST", "/v11/projects")).toBeUndefined();
+    expect(noRepo.output).toContain("Don't know which GitHub repo");
   });
 });
 

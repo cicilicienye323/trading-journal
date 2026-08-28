@@ -26,7 +26,34 @@ satu perintah. Yang kamu kerjain cuma bikin **tiga token** (~5 menit):
 | `GITHUB_TOKEN` | github.com/settings/tokens → **classic**    | centang `repo` |
 | `VERCEL_TOKEN` | vercel.com/account/tokens                   | default        |
 
-Cek dulu ketiga token-nya kepakai apa nggak — ini read-only, nggak bikin apa pun:
+### Kalau nggak mau token nempel di mana-mana
+
+Token itu kredensial hidup. Jangan pernah nempelin ke chat, komen issue, atau
+apa pun yang nyimpen log permanen — sekali ke-log, dia ada di situ selamanya dan
+siapa pun yang bisa baca log itu bisa pakai.
+
+Cara paling aman: **`.github/workflows/deploy-bootstrap.yml`**. Deploy-nya jalan
+sebagai GitHub Action, token disimpan sebagai **repository secret** — terenkripsi,
+otomatis kesensor di output job, dan bisa dicabut dari satu layar.
+
+1. Bikin repo GitHub kosong dan push (langkah 2 di bawah). Ini nggak butuh bagi
+   token ke siapa pun — pakai kredensial git kamu sendiri.
+2. Settings → Secrets and variables → Actions, tambahin dua secret:
+   `NEON_API_KEY` dan `VERCEL_TOKEN`.
+3. Actions → **Deploy bootstrap** → Run workflow. Biarin `dry_run` **centang**
+   dulu buat preflight. Kalau bersih, jalanin lagi dengan `dry_run` dilepas.
+
+`GITHUB_TOKEN` **nggak usah** dibikin sama sekali — Actions nyuntikin sendiri
+tiap run, dan repo-nya udah ada, jadi PAT nggak ada gunanya lagi di sini.
+
+Cabut `NEON_API_KEY` sama `VERCEL_TOKEN` begitu URL-nya hidup. Ini langkah
+provisioning sekali jalan, bukan kredensial yang perlu nempel.
+
+### Atau jalanin lokal
+
+Kalau mau jalanin dari laptop sendiri, token cukup ada di shell kamu dan nggak
+ke mana-mana. Cek dulu ketiganya kepakai apa nggak — ini read-only, nggak bikin
+apa pun:
 
 ```bash
 NEON_API_KEY=... GITHUB_TOKEN=... VERCEL_TOKEN=... \

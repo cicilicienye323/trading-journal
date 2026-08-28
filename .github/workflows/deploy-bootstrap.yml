@@ -1,0 +1,126 @@
+name: Deploy bootstrap
+
+# Provisions Neon + Vercel and runs the first production deploy.
+#
+# Why this exists as a workflow rather than a command someone runs locally:
+# the deploy needs a Neon API key and a Vercel token, and those should not be
+# pasted into a chat, an issue thread, or anything else that keeps a permanent
+# log. Stored as repository secrets they are encrypted at rest, masked in job
+# output, and revocable from one screen — and nobody has to hand them to
+# another person or an agent to get the deploy done.
+#
+# Run it from Actions > Deploy bootstrap > Run workflow.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   NEON_API_KEY   console.neon.tech > Settings > API keys
+#   VERCEL_TOKEN   vercel.com/account/tokens
+#
+# Deliberately NOT required: GITHUB_TOKEN. Actions injects a scoped one per
+# run, so no personal access token is involved at all — the repo already
+# exists by the time this runs, which is the only thing a PAT was needed for.
+#
+# Before the first run, connect GitHub to Vercel once at
+# vercel.com/account/login-connections. That is a browser consent screen with
+# no API equivalent; without it Vercel cannot see this repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: "Neon + Vercel project name"
+        required: true
+        default: "trading-journal"
+      region:
+        description: "Neon region id"
+        required: true
+        default: "aws-ap-southeast-1"
+      dry_run:
+        description: "Preflight only — validate tokens, create nothing"
+        type: boolean
+        required: true
+        default: true
+
+# Two concurrent provisioning runs would race to create the same project.
+concurrency:
+  group: deploy-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Provision and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # No `environment:` on purpose — it would have to exist before the first
+    # run or the job fails to start. If you want a human approval gate later,
+    # create a "production" environment with a required reviewer and add
+    # `environment: production` here.
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check required secrets are present
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          missing=""
+          [ -z "$NEON_API_KEY" ] && missing="$missing NEON_API_KEY"
+          [ -z "$VERCEL_TOKEN" ] && missing="$missing VERCEL_TOKEN"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            echo "Add them under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "Both secrets are present."
+
+      - name: Preflight (read-only)
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          # Present only so the preflight can report on it; the repo already
+          # exists, so the github step is skipped in the real run below.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/deploy-bootstrap.mjs --dry-run \
+            --name "${{ inputs.project_name }}" \
+            --region "${{ inputs.region }}"
+
+      - name: Provision and deploy
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DEMO_EMAIL: ${{ vars.DEMO_EMAIL || 'demo@example.com' }}
+        run: |
+          # --skip github: the repo exists and this checkout IS the code, so
+          # there is nothing to create and nothing to push.
+          node scripts/deploy-bootstrap.mjs \
+            --name "${{ inputs.project_name }}" \
+            --region "${{ inputs.region }}" \
+            --skip github
+
+      # .deploy-state.json holds the live connection string and the generated
+      # auth secret. It stays on the ephemeral runner and is never uploaded as
+      # an artifact — an artifact is downloadable by anyone with repo read.
+      - name: Scrub deploy state
+        if: always()
+        run: rm -f .deploy-state.json
+
+      - name: Where to look next
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "### Deploy bootstrap finished" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Health: https://${{ inputs.project_name }}.vercel.app/api/health" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Expect \`{\"status\":\"ok\",\"database\":\"reachable\"}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Revoke \`NEON_API_KEY\` and \`VERCEL_TOKEN\` once the URL is live — this is a one-time provisioning step." >> "$GITHUB_STEP_SUMMARY"
