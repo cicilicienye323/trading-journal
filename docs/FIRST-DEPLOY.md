@@ -26,6 +26,15 @@ satu perintah. Yang kamu kerjain cuma bikin **tiga token** (~5 menit):
 | `GITHUB_TOKEN` | github.com/settings/tokens → **classic**    | centang `repo` |
 | `VERCEL_TOKEN` | vercel.com/account/tokens                   | default        |
 
+Cek dulu ketiga token-nya kepakai apa nggak — ini read-only, nggak bikin apa pun:
+
+```bash
+NEON_API_KEY=... GITHUB_TOKEN=... VERCEL_TOKEN=... \
+  npm run deploy:bootstrap -- --dry-run
+```
+
+Kalau bersih, baru jalanin beneran:
+
 ```bash
 NEON_API_KEY=... GITHUB_TOKEN=... VERCEL_TOKEN=... \
   npm run deploy:bootstrap -- --name trading-journal
@@ -43,6 +52,9 @@ yang sudah jadi dilewatin. Mau ngerjain sebagian manual juga bisa:
 ```bash
 npm run deploy:bootstrap -- --skip neon,github    # udah dikerjain manual
 ```
+
+Langkah yang bisa di-`--skip`: `neon`, `github`, `push`, `migrate`, `vercel`,
+`seed`, `verify`.
 
 Connection string dan secret yang kegenerate disimpan di `.deploy-state.json`
 (sudah masuk `.gitignore` — perlakuin kayak `.env.local`).
