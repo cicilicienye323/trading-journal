@@ -215,6 +215,24 @@ Bagian yang layak dipahami:
 
 `npm run verify` di lokal isinya sama persis dengan CI. Jalankan sebelum push.
 
+### Kenapa `typecheck` manggil `next typegen` dulu
+
+Next 16 nge-generate tipe buat route, page, dan layout ke `.next/types/` — termasuk
+`LayoutProps` yang dipakai di `src/app/layout.tsx`. Tipe itu **nggak di-commit**
+(`.next/` ada di `.gitignore`), jadi di checkout yang masih bersih tipe itu belum
+ada dan `tsc --noEmit` gagal dengan `Cannot find name 'LayoutProps'`.
+
+Di laptop kamu error ini nggak keliatan, karena `.next/` sudah kebentuk dari
+`npm run dev` atau `npm run build` sebelumnya. Artinya `typecheck` bisa **hijau
+palsu di lokal tapi merah di CI** — persis jenis kegagalan yang paling bikin
+bingung, karena "di komputerku jalan kok".
+
+Makanya script-nya `next typegen && tsc --noEmit`, bukan `tsc --noEmit` doang.
+`next typegen` cuma bikin file tipe, nggak nge-build apa-apa, jadi cepat.
+
+> Kalau kamu nambah script yang manggil `tsc` langsung, inget nambahin
+> `next typegen` di depannya.
+
 ## Deploy
 
 Lihat **`docs/DEPLOY.md`** buat langkah Vercel + Neon dan jalur Fly.io.
