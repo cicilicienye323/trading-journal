@@ -1,8 +1,10 @@
-# Local Postgres for development and tests.
+# Local stack: app + Postgres.
 #
-# Deliberately the same major version as Neon (16) so a migration that applies
-# locally applies in production too. Data lives in a named volume, so
-# `docker compose down` keeps it and `docker compose down -v` wipes it.
+# `docker compose up` gives anyone who clones the repo a running app and
+# database in one command — no Node version juggling, no local Postgres install.
+#
+# Day-to-day development is still `npm run dev` against just the db service
+# (`npm run db:up`), because the container has no hot reload.
 services:
   db:
     image: postgres:16-alpine
@@ -21,6 +23,39 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fintech_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        # Waits for the healthcheck above, not just for the container to exist.
+        # Without this the app boots first and dies on connection refused.
+        condition: service_healthy
+    environment:
+      # "db" is the compose service name — inside the network that resolves to
+      # the database container. localhost here would point at the app itself.
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/fintech_dev
+      BETTER_AUTH_SECRET: local-development-only-secret-not-for-production
+      BETTER_AUTH_URL: http://localhost:3000
+      DEMO_EMAIL: demo@example.com
+      # Optional: pass through from the host if set, empty otherwise.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      # 127.0.0.1, not localhost: /etc/hosts maps localhost to both 127.0.0.1
+      # and ::1, busybox wget tries ::1 first, and the Next server binds IPv4
+      # only — so "localhost" here fails with connection refused even though
+      # the app is healthy.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
 volumes:
   pgdata:

@@ -9,6 +9,11 @@
  * produce a migration from, which proves the migration pipeline works before
  * any real modelling starts. Delete it once real tables exist.
  *
+ * Naming trap to know before you start: Better Auth generates its own `user`,
+ * `session`, `account`, and `verification` tables. Its `account` table holds
+ * OAuth provider links — nothing to do with trading. So a broker account table
+ * must be named `trading_accounts`, never `account`, or the two collide.
+ *
  * Conventions worth keeping:
  * - `timestamp` columns use `withTimezone: true`. Trading data is timestamped
  *   in UTC and rendered in the user's zone; a naive timestamp loses that and

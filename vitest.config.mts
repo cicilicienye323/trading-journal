@@ -8,6 +8,12 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
     globals: true,
+    env: {
+      // Importing "@/env" runs validation at module load. Tests exercise the
+      // schema through parseEnv() directly, so skip the module-level parse
+      // rather than requiring a full valid environment to run the suite.
+      SKIP_ENV_VALIDATION: "true",
+    },
     // Next.js build output and e2e specs are not unit tests.
     exclude: ["node_modules/**", ".next/**", "e2e/**"],
     coverage: {

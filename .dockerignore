@@ -1,0 +1,17 @@
+# Keep the build context small and, more importantly, keep secrets and host
+# build artifacts out of the image.
+node_modules
+.next
+.git
+.github
+coverage
+docs
+fixtures
+services
+.env*
+!.env.example
+*.md
+.DS_Store
+Dockerfile
+.dockerignore
+docker-compose.yml

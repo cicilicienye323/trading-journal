@@ -10,29 +10,48 @@ config.
 
 ## Isinya
 
-| Bagian    | Pilihan                  | Alasan singkat                               |
-| --------- | ------------------------ | -------------------------------------------- |
-| Framework | Next.js 16 (App Router)  | Satu repo buat UI + API, deploy paling mulus |
-| Bahasa    | TypeScript, `strict`     | Error ketahuan di editor, bukan di produksi  |
-| Styling   | Tailwind CSS v4          | Nggak perlu mikir nama class                 |
-| Database  | Postgres (Neon)          | Relasional, dan finance itu relasional       |
-| ORM       | Drizzle                  | Migrasinya SQL biasa yang bisa kamu baca     |
-| Test      | Vitest + Testing Library | Config-nya satu file, jalannya cepat         |
-| Lint      | ESLint + Prettier        | Prettier format, ESLint benar/salah          |
-| CI        | GitHub Actions           | Gratis, dan badge-nya kelihatan di repo      |
-| Deploy    | Vercel + Neon            | Preview per PR tanpa disetel                 |
+| Bagian    | Pilihan                  | Alasan singkat                                |
+| --------- | ------------------------ | --------------------------------------------- |
+| Framework | Next.js 16 (App Router)  | Satu repo buat UI + API, deploy paling mulus  |
+| Bahasa    | TypeScript, `strict`     | Error ketahuan di editor, bukan di produksi   |
+| Styling   | Tailwind CSS v4          | Nggak perlu mikir nama class                  |
+| Database  | Postgres (Neon)          | Relasional, dan finance itu relasional        |
+| ORM       | Drizzle                  | Migrasinya SQL biasa yang bisa kamu baca      |
+| Auth      | Better Auth              | Session di DB, bisa dicabut, tanpa vendor     |
+| Chart     | Recharts 3               | Equity curve = satu `<LineChart>`             |
+| Timezone  | date-fns-tz              | Jam server broker → UTC, ini logika inti      |
+| LLM       | `@anthropic-ai/sdk`      | Opsional — tanpa API key app tetap jalan      |
+| Test      | Vitest + Testing Library | Config-nya satu file, jalannya cepat          |
+| Lint      | ESLint + Prettier        | Prettier format, ESLint benar/salah           |
+| Container | Docker + Compose         | `docker compose up` = app + DB, satu perintah |
+| CI        | GitHub Actions           | Gratis, dan badge-nya kelihatan di repo       |
+| Deploy    | Vercel + Neon            | Preview per PR tanpa disetel                  |
 
 ## Mulai lokal
 
 Butuh Node 20+ dan Docker.
 
+### Cara cepat — semuanya di Docker
+
+```bash
+cp .env.example .env.local
+docker compose up --build
+```
+
+App + Postgres nyala bareng di `http://localhost:3000`. Ini cara paling gampang
+buat orang lain nyobain repo kamu tanpa install apa-apa.
+
+### Cara sehari-hari — dev server + DB di Docker
+
+Container nggak punya hot reload, jadi buat ngoding pakai ini:
+
 ```bash
 npm install
 cp .env.example .env.local
 
-npm run db:up          # Postgres lokal via Docker
+npm run db:up          # Postgres lokal doang
 npm run db:migrate     # terapkan migrasi
-npm run db:seed        # isi data demo
+npm run seed           # isi data demo
 
 npm run dev
 ```
@@ -42,16 +61,25 @@ Cek `http://localhost:3000/api/health` — harus balas
 
 ## Perintah
 
-| Perintah              | Gunanya                                          |
-| --------------------- | ------------------------------------------------ |
-| `npm run dev`         | Server development                               |
-| `npm run verify`      | Format + lint + typecheck + test (sama kayak CI) |
-| `npm run test:watch`  | Test mode watch                                  |
-| `npm run db:up/down`  | Start/stop Postgres lokal                        |
-| `npm run db:generate` | Bikin file migrasi dari perubahan `schema.ts`    |
-| `npm run db:migrate`  | Terapkan migrasi                                 |
-| `npm run db:studio`   | GUI buat lihat isi database                      |
-| `npm run fixtures`    | Regenerate CSV demo MT5                          |
+| Perintah              | Gunanya                                               |
+| --------------------- | ----------------------------------------------------- |
+| `npm run dev`         | Server development                                    |
+| `npm run verify`      | Format + lint + typecheck + test (sama kayak CI)      |
+| `npm run test:watch`  | Test mode watch                                       |
+| `npm run up` / `down` | Start/stop seluruh stack (app + DB) di Docker         |
+| `npm run db:up/down`  | Start/stop Postgres lokal doang                       |
+| `npm run db:generate` | Bikin file migrasi dari perubahan `schema.ts`         |
+| `npm run db:migrate`  | Terapkan migrasi                                      |
+| `npm run db:push`     | Dorong schema langsung, tanpa file migrasi (dev only) |
+| `npm run db:studio`   | GUI buat lihat isi database                           |
+| `npm run seed`        | Isi data demo                                         |
+| `npm run fixtures`    | Regenerate CSV demo MT5                               |
+
+> **`db:push` vs `db:migrate`.** `db:push` nyamain schema database sama
+> `schema.ts` tanpa bikin file migrasi — enak buat iterasi cepat di awal, tapi
+> **bisa hapus kolom beserta datanya tanpa nanya.** Pakai `db:push` selama masih
+> ngutak-atik bentuk tabel di lokal; begitu ada data yang sayang hilang (apalagi
+> produksi), pindah ke `db:generate` + `db:migrate`.
 
 **Sebelum push, jalankan `npm run verify`.** Isinya persis sama dengan CI, jadi
 kalau lolos di lokal, lolos juga di GitHub. Lebih cepat daripada nunggu CI merah.
@@ -152,6 +180,30 @@ skema-nya ketinggalan setengah jalan. Membersihkan itu di database produksi
 adalah pengalaman yang nggak mau kamu alami.
 
 Prosesnya sengaja pelan: generate, **baca SQL-nya**, commit, terapkan.
+
+### Docker ada, tapi Vercel nggak pakai Dockerfile-nya
+
+Deploy produksi tetap lewat build native Vercel. Dockerfile di repo ini gunanya
+dua: bikin orang lain bisa jalanin repo kamu dengan satu perintah
+(`docker compose up`), dan jadi bukti kamu ngerti container.
+
+**Ongkosnya:** ada dua jalur build yang harus tetap jalan — Vercel dan Docker —
+dan bisa lepas sinkron tanpa ketahuan. Makanya `docker build` **wajib** jalan di
+CI: Dockerfile busuk yang nggak pernah dites lebih buruk daripada nggak ada.
+
+CI juga nyalain container hasil build-nya dan nembak `/api/health`. Image yang
+lolos `docker build` tapi mati waktu start itu kelihatan sukses di CI kalau
+cuma di-build doang.
+
+### `ANTHROPIC_API_KEY` opsional, dan itu diuji
+
+Repo harus bisa di-clone dan dijalanin orang yang nggak punya akun Anthropic.
+Fitur yang butuh model muncul disabled, bukan bikin app crash.
+
+Yang bikin ini gampang salah: `docker compose` nulis variable kosong sebagai
+**string kosong**, bukan "nggak ada". Zod `.optional()` cuma nangani yang kedua.
+Tanpa penanganan khusus, `docker compose up` di mesin tanpa API key bakal bikin
+app mati waktu boot. Ada test khusus buat kasus ini di `src/env.test.ts`.
 
 ### Fixture dicek ulang di CI
 
