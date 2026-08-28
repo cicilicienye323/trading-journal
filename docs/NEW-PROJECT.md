@@ -73,7 +73,10 @@ beres dan kamu bisa mulai nulis fitur.
 ## 5. Push + deploy — lakukan SEKARANG, bukan nanti
 
 Ini aturan paling penting di seluruh dokumen. Deploy waktu aplikasinya masih
-halaman kosong. Langkahnya di [`DEPLOY.md`](DEPLOY.md).
+halaman kosong.
+
+- Pertama kali: [`FIRST-DEPLOY.md`](FIRST-DEPLOY.md) — langkah per langkah + troubleshooting
+- Sudah pernah: [`DEPLOY.md`](DEPLOY.md) — referensi ringkas
 
 Kalau dibalik — ngoding dua minggu baru deploy — kamu bakal debug sepuluh
 masalah deploy sekaligus di hari deadline. Itu penyebab paling umum portfolio

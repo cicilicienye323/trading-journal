@@ -33,8 +33,21 @@ export const serverSchema = z.object({
     ),
 
   // Absolute base URL Better Auth builds callback links against. Must match the
-  // deployed origin exactly or the auth cookie is set on the wrong domain.
-  BETTER_AUTH_URL: z.string().url("BETTER_AUTH_URL must be a full URL including scheme"),
+  // origin actually being served or the session cookie lands on the wrong
+  // domain and login fails silently.
+  //
+  // Optional here because on Vercel it is derived from the platform's own
+  // variables (see resolveAuthUrl). Set it explicitly for local development and
+  // for custom domains.
+  BETTER_AUTH_URL: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().url("BETTER_AUTH_URL must be a full URL including scheme").optional(),
+  ),
+
+  // Populated by Vercel. Neither includes the protocol scheme.
+  VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
+  VERCEL_URL: z.string().optional(),
+  VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
 
   // The read-only demo account. Mutations check against this so a visitor
   // clicking around can't wreck the data a recruiter sees next.
@@ -56,7 +69,42 @@ export const serverSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 
-export type Env = z.infer<typeof serverSchema>;
+type RawEnv = z.infer<typeof serverSchema>;
+
+/** The parsed environment, with `BETTER_AUTH_URL` guaranteed present. */
+export type Env = RawEnv & { BETTER_AUTH_URL: string };
+
+/**
+ * Works out the origin Better Auth should treat as its base.
+ *
+ * The problem this solves: you cannot know your Vercel URL until after the
+ * first deploy, but the app needs the value to boot. Hardcoding it means the
+ * first deploy is guaranteed to be wrong, and the symptom is not an error —
+ * it's login appearing to succeed while the session cookie is set on a
+ * different domain, so every request afterwards looks logged out.
+ *
+ * Precedence:
+ *   1. An explicit BETTER_AUTH_URL. Required locally, and the only way to use
+ *      a custom domain.
+ *   2. On a Vercel production deploy, the project's stable production domain —
+ *      not the per-deploy URL, which changes on every push.
+ *   3. On any other Vercel deploy, that deployment's own URL, so preview
+ *      deployments get cookies on the domain they are actually served from.
+ *
+ * Vercel's variables omit the protocol, hence the https:// prefix. They also
+ * require "Enable access to System Environment Variables" to be on in project
+ * settings; if it is off, none of them exist and we fall through to the error.
+ */
+export function resolveAuthUrl(raw: RawEnv): string | undefined {
+  if (raw.BETTER_AUTH_URL) return raw.BETTER_AUTH_URL;
+
+  const host =
+    raw.VERCEL_ENV === "production"
+      ? (raw.VERCEL_PROJECT_PRODUCTION_URL ?? raw.VERCEL_URL)
+      : raw.VERCEL_URL;
+
+  return host ? `https://${host}` : undefined;
+}
 
 /**
  * Parses an environment-shaped object. Exported separately from the module-level
@@ -68,17 +116,33 @@ export type Env = z.infer<typeof serverSchema>;
 export function parseEnv(source: Record<string, unknown>): Env {
   const parsed = serverSchema.safeParse(source);
 
-  if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((issue) => `  - ${issue.path.join(".")}: ${issue.message}`)
-      .join("\n");
+  const issues = parsed.success
+    ? []
+    : parsed.error.issues.map((issue) => `  - ${issue.path.join(".")}: ${issue.message}`);
 
-    throw new Error(
-      `Invalid environment variables:\n${issues}\n\nCopy .env.example to .env.local and fill it in.`,
+  // Resolved from the raw source rather than from parsed.data, so that a
+  // missing auth URL is reported in the *same* pass as any schema failures.
+  // Reporting it only after the schema passes would mean fixing three
+  // variables, re-running, and being told about a fourth.
+  const authUrl = resolveAuthUrl(source as RawEnv);
+
+  if (!authUrl) {
+    issues.push(
+      "  - BETTER_AUTH_URL: not set, and no Vercel URL to fall back to. " +
+        "Locally use http://localhost:3000. On Vercel it is derived automatically, " +
+        'but that needs "Enable access to System Environment Variables" in project settings.',
     );
   }
 
-  return parsed.data;
+  if (issues.length > 0) {
+    throw new Error(
+      `Invalid environment variables:\n${issues.join("\n")}\n\n` +
+        "Copy .env.example to .env.local and fill it in.",
+    );
+  }
+
+  // Safe: issues is empty, so the schema parsed and authUrl resolved.
+  return { ...(parsed as { data: RawEnv }).data, BETTER_AUTH_URL: authUrl! };
 }
 
 /**

@@ -11,6 +11,10 @@
 > Neon free tier, nggak minta kartu kredit, ~5 menit. Tanpa itu `DATABASE_URL`
 > produksi nggak ada dan `/api/health` bakal balas 503 di Vercel.
 
+> **Baru pertama kali deploy?** Pakai [`FIRST-DEPLOY.md`](FIRST-DEPLOY.md) —
+> langkah per langkah plus troubleshooting. Dokumen ini referensi yang lebih
+> ringkas, buat waktu kamu sudah pernah sekali.
+
 Aturan utama: **deploy duluan, sebelum ada fitur.** Bikin pipeline-nya jalan
 sampai ada URL live yang nampilin halaman kosong, baru mulai ngoding. Kalau
 dibalik — ngoding dua minggu baru deploy — kamu bakal debug sepuluh masalah

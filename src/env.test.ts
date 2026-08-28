@@ -61,6 +61,67 @@ describe("parseEnv", () => {
     expect(parseEnv({ ...VALID, DATABASE_URL: value }).DATABASE_URL).toBe(value);
   });
 
+  // You cannot know your Vercel URL before the first deploy, so BETTER_AUTH_URL
+  // is derived there. Getting this wrong does not raise — login appears to work
+  // while the cookie lands on another domain — so each branch is pinned.
+  describe("BETTER_AUTH_URL resolution", () => {
+    const withoutAuthUrl = { ...VALID, BETTER_AUTH_URL: undefined };
+
+    it("prefers an explicit value over anything Vercel provides", () => {
+      const env = parseEnv({
+        ...VALID,
+        BETTER_AUTH_URL: "https://custom-domain.com",
+        VERCEL_ENV: "production",
+        VERCEL_PROJECT_PRODUCTION_URL: "ignored.vercel.app",
+        VERCEL_URL: "also-ignored.vercel.app",
+      });
+
+      expect(env.BETTER_AUTH_URL).toBe("https://custom-domain.com");
+    });
+
+    it("uses the stable production domain on a production deploy", () => {
+      // Not VERCEL_URL: that is the per-deploy URL and changes on every push,
+      // which would invalidate every existing session.
+      const env = parseEnv({
+        ...withoutAuthUrl,
+        VERCEL_ENV: "production",
+        VERCEL_PROJECT_PRODUCTION_URL: "my-app.vercel.app",
+        VERCEL_URL: "my-app-abc123.vercel.app",
+      });
+
+      expect(env.BETTER_AUTH_URL).toBe("https://my-app.vercel.app");
+    });
+
+    it("uses the deployment's own URL on a preview deploy", () => {
+      // A preview is served from its own domain, so the cookie has to be set
+      // there or the preview is permanently logged out.
+      const env = parseEnv({
+        ...withoutAuthUrl,
+        VERCEL_ENV: "preview",
+        VERCEL_PROJECT_PRODUCTION_URL: "my-app.vercel.app",
+        VERCEL_URL: "my-app-git-branch.vercel.app",
+      });
+
+      expect(env.BETTER_AUTH_URL).toBe("https://my-app-git-branch.vercel.app");
+    });
+
+    it("adds the scheme, which Vercel's variables omit", () => {
+      const env = parseEnv({ ...withoutAuthUrl, VERCEL_URL: "x.vercel.app" });
+      expect(env.BETTER_AUTH_URL).toMatch(/^https:\/\//);
+    });
+
+    it("fails loudly when there is nothing to derive from", () => {
+      // The case where system environment variables are disabled in project
+      // settings: booting with a wrong origin is worse than not booting.
+      expect(() => parseEnv(withoutAuthUrl)).toThrow(/BETTER_AUTH_URL/);
+    });
+
+    it("treats an empty BETTER_AUTH_URL as absent", () => {
+      const env = parseEnv({ ...VALID, BETTER_AUTH_URL: "", VERCEL_URL: "x.vercel.app" });
+      expect(env.BETTER_AUTH_URL).toBe("https://x.vercel.app");
+    });
+  });
+
   it("reports every missing variable at once, not just the first", () => {
     // Fixing one variable only to be told about the next is a miserable loop.
     try {
@@ -70,8 +131,11 @@ describe("parseEnv", () => {
       const message = (error as Error).message;
       expect(message).toContain("DATABASE_URL");
       expect(message).toContain("BETTER_AUTH_SECRET");
-      expect(message).toContain("BETTER_AUTH_URL");
       expect(message).toContain("DEMO_EMAIL");
+      // Including the derived one. It is resolved outside the schema, so it
+      // would be easy to report in a second pass — which is the loop this
+      // test exists to prevent.
+      expect(message).toContain("BETTER_AUTH_URL");
     }
   });
 });
