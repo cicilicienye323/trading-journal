@@ -40,6 +40,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# Written by scripts/deploy-bootstrap.mjs. Holds the live connection string and
+# the generated auth secret so re-runs can resume — treat it like .env.local.
+.deploy-state.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

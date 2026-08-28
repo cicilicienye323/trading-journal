@@ -15,6 +15,48 @@ error di langkah 2 jauh lebih gampang dibaca daripada gejalanya di langkah 5.
 
 ---
 
+## Jalur cepat (opsional) — `npm run deploy:bootstrap`
+
+Kalau kamu nggak mau ngeklik-klik di tiga dashboard, langkah 1–5 bisa dijalanin
+satu perintah. Yang kamu kerjain cuma bikin **tiga token** (~5 menit):
+
+| Token          | Ambil di                                    | Scope          |
+| -------------- | ------------------------------------------- | -------------- |
+| `NEON_API_KEY` | console.neon.tech → Settings → **API keys** | default        |
+| `GITHUB_TOKEN` | github.com/settings/tokens → **classic**    | centang `repo` |
+| `VERCEL_TOKEN` | vercel.com/account/tokens                   | default        |
+
+```bash
+NEON_API_KEY=... GITHUB_TOKEN=... VERCEL_TOKEN=... \
+  npm run deploy:bootstrap -- --name trading-journal
+```
+
+Scriptnya bikin project Neon (Postgres 16, Singapore), bikin repo GitHub dan
+push, jalanin migrasi, bikin project Vercel + isi ketiga environment variable di
+**ketiga** target, deploy, seed, terus nge-poll `/api/health` sampai hijau.
+
+**Aman diulang.** Tiap langkah ngecek dulu resource-nya sudah ada atau belum, dan
+nggak pernah ngehapus apa pun. Kalau mati di tengah — misalnya GitHub belum
+kesambung ke Vercel — betulin penyebabnya terus jalanin perintah yang sama lagi;
+yang sudah jadi dilewatin. Mau ngerjain sebagian manual juga bisa:
+
+```bash
+npm run deploy:bootstrap -- --skip neon,github    # udah dikerjain manual
+```
+
+Connection string dan secret yang kegenerate disimpan di `.deploy-state.json`
+(sudah masuk `.gitignore` — perlakuin kayak `.env.local`).
+
+> **Dua hal yang tetap harus lewat browser**, karena nggak ada API-nya: daftar
+> akun Neon, dan nyambungin GitHub ke Vercel sekali di
+> vercel.com/account/login-connections. Sisanya diurus script.
+
+Kalau kamu mau ngerti tiap langkahnya — dan itu yang bakal ditanya waktu
+interview — kerjain manual di bawah ini. Baca minimal sekali walaupun pakai
+jalur cepat.
+
+---
+
 ## Langkah 1 — Neon (~5 menit)
 
 1. Buka [neon.tech](https://neon.tech) → **Sign up** (bisa pakai akun GitHub).
