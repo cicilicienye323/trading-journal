@@ -1,0 +1,8 @@
+# Git does not track empty directories.
+#
+# Without this file `public/` does not exist in a fresh clone, and the
+# Dockerfile's `COPY --from=builder /app/public ./public` fails the build with
+# "/app/public: not found". It only worked locally because the directory
+# survived after its contents were deleted.
+#
+# Delete this once there is a real asset in here.

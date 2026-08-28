@@ -92,12 +92,15 @@ jobs:
             -e DEMO_EMAIL="demo@example.com" \
             fintech-app:ci
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health || true)
-            # 503 is the expected answer: the app is up, the database is not.
-            # Either code proves the server booted and is routing requests.
-            if [ "$code" = "200" ] || [ "$code" = "503" ]; then
-              echo "container is serving (HTTP $code)"; exit 0
-            fi
+            body=$(curl -s --max-time 5 http://127.0.0.1:3000/api/health || true)
+            # Match on the body, not just the status code. A status-only check
+            # passes against whatever else happens to hold the port, which is
+            # exactly how a smoke test reports success while testing nothing.
+            # 503 with this body is the expected answer here: app up, no database.
+            case "$body" in
+              *'"database"'*)
+                echo "container is serving its own health route: $body"; exit 0 ;;
+            esac
             sleep 2
           done
           echo "::error::container never served /api/health"
