@@ -179,6 +179,34 @@ Ini juga endpoint yang dipakai monitoring uptime nanti.
 
 ---
 
+## `npm audit` bakal ngeluh — dan itu wajar
+
+`npm audit` nunjukin 4 temuan **moderate** di `esbuild`, ketarik lewat
+`@esbuild-kit/*` yang dipakai `drizzle-kit`.
+
+**Jangan jalanin `npm audit fix --force`.** Perintah itu bakal nurunin
+`drizzle-kit` dari 0.31 ke **0.18** — mundur belasan versi major — dan bikin
+semua perintah `db:*` di repo ini rusak. npm nyebut itu "fix" karena dia cuma
+nyari versi mana pun yang nggak kena advisory, tanpa peduli itu maju atau mundur.
+
+Kenapa temuan ini aman diabaikan:
+
+- `drizzle-kit` itu **devDependency**. Nggak pernah ikut ke bundle produksi.
+- Advisory-nya soal **dev server bawaan esbuild** yang ngelayani request lintas
+  origin. `drizzle-kit` pakai esbuild buat nge-bundle file config, bukan buat
+  ngejalanin server. Jalur yang rentan itu nggak pernah kepanggil.
+
+Yang **tidak** boleh diabaikan: temuan `high`/`critical` di `dependencies`
+(bukan `devDependencies`), apalagi yang kena runtime. Itu ditangani.
+
+Cara lihat bedanya:
+
+```bash
+npm audit --omit=dev     # cuma yang beneran ikut ke produksi
+```
+
+Sekarang perintah itu harus bersih. Kalau nanti nggak bersih, itu baru urusan.
+
 ## Kalau ada yang error
 
 | Gejala                               | Kemungkinan besar                                            |

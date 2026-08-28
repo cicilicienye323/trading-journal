@@ -1,5 +1,5 @@
 import react from "@vitejs/plugin-react";
-import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -19,6 +19,7 @@ export default defineConfig({
   resolve: {
     // Mirrors the "@/*" path alias in tsconfig.json. Vitest does not read
     // tsconfig paths on its own, so this has to be kept in sync by hand.
-    alias: { "@": resolve(__dirname, "./src") },
+    // This file is ESM, so there is no __dirname — resolve from import.meta.url.
+    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
 });

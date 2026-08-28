@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+// Deliberately imported through the "@/" alias rather than a relative path.
+// Vitest resolves aliases from vitest.config.mts, which duplicates the mapping
+// in tsconfig.json — if those two drift apart, this import fails and the suite
+// tells you immediately instead of at some unrelated point later.
+import { getInstrument, INSTRUMENTS } from "@/lib/fx/instruments";
+
 import { generateTrades, isMarketOpen, toMt5Csv } from "./generate";
-import { getInstrument, INSTRUMENTS } from "./instruments";
 import { createRng } from "./random";
 
 describe("createRng", () => {
