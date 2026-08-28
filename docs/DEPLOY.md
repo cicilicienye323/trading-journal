@@ -1,5 +1,16 @@
 # Deploy
 
+> **Status akunmu (per jawaban di board):**
+>
+> | Akun     | Status       | Perlu diapain                                    |
+> | -------- | ------------ | ------------------------------------------------ |
+> | GitHub   | ✅ sudah ada | tinggal push                                     |
+> | Vercel   | ✅ sudah ada | import repo-nya                                  |
+> | **Neon** | ❌ **belum** | **daftar dulu — ini satu-satunya yang nyangkut** |
+>
+> Neon free tier, nggak minta kartu kredit, ~5 menit. Tanpa itu `DATABASE_URL`
+> produksi nggak ada dan `/api/health` bakal balas 503 di Vercel.
+
 Aturan utama: **deploy duluan, sebelum ada fitur.** Bikin pipeline-nya jalan
 sampai ada URL live yang nampilin halaman kosong, baru mulai ngoding. Kalau
 dibalik — ngoding dua minggu baru deploy — kamu bakal debug sepuluh masalah

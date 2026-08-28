@@ -4,9 +4,9 @@ Template repo untuk tiga proyek portfolio bertema fintech/trading. Dibikin
 sekali, dipakai ulang — supaya jam ngoding kamu habis di logika bisnis, bukan di
 config.
 
-> **Catatan buat yang baca ini nanti:** ini template, bukan aplikasi. Waktu mulai
-> proyek baru, copy repo ini, ganti nama di `package.json`, hapus tabel
-> `healthcheck`, dan tulis schema-nya sendiri.
+> **Ini template, bukan aplikasi.** Tiap proyek dapat repo sendiri, di-fork dari
+> sini. Langkah fork-nya ada di [`docs/NEW-PROJECT.md`](docs/NEW-PROJECT.md) —
+> 10 menit, dikerjain sekali per proyek.
 
 ## Isinya
 
