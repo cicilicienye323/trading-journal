@@ -168,6 +168,32 @@ yang cocok, **instant yang tersimpan di database harus identik**. Kalau beda,
 konversi timezone-mu salah. Itu assertion paling berguna yang bisa kamu tulis
 buat fitur import.
 
+### Yang berubah, dan yang nggak, waktu timezone-nya digeser
+
+Ini yang bikin file kedua berharga. Dari 180 trade yang **sama persis**:
+
+| Yang dihitung                                         | Pakai tanggal UTC | Pakai tanggal EET |
+| ----------------------------------------------------- | ----------------- | ----------------- |
+| Win rate, profit factor, net P&L, avg R, max drawdown | identik           | identik           |
+| Jumlah hari trading (by close date)                   | **130**           | **119**           |
+| Jumlah hari trading (by open date)                    | **154**           | **131**           |
+| Baris yang pindah tanggal (close)                     | —                 | **41 dari 180**   |
+
+Metrik agregat nggak berubah, karena semuanya berbasis P&L dan urutan relatif.
+Tapi **pengelompokan per-hari beda 9%** — dan **nggak ada satu error pun** yang
+muncul kalau kamu salah pilih timezone-nya.
+
+Buat batas rugi harian prop firm, itu menentukan: "hari trading" versi prop firm
+adalah **hari kalender di server broker**, karena itu definisi kontraktualnya.
+Bukan hari UTC, bukan hari lokal user.
+
+`src/lib/fx/fixtures.test.ts` ngunci sifat-sifat ini di file yang di-commit.
+Kenapa perlu, padahal CI sudah ngecek determinisme fixture: gate itu cuma
+mastiin **file cocok sama generator**. Kalau ada yang ngubah rentang tanggal di
+generator terus regenerate dan commit, gate-nya tetap hijau — tapi file EET-nya
+bisa diam-diam berhenti ngelewatin batas DST, dan nggak ada yang protes. Test
+itu yang protes.
+
 ### Angka referensi fixture
 
 Diverifikasi terpisah oleh Tech Lead (saldo awal 10.000, account UTC):
