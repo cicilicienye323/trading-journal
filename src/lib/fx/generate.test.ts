@@ -130,6 +130,56 @@ describe("toMt5Csv", () => {
     expect(lines[0]).toContain("Symbol");
   });
 
+  it("renders in UTC by default", () => {
+    const trades = generateTrades({ count: 3 });
+    const firstRow = toMt5Csv(trades).trim().split("\n")[1]!;
+    const openTime = firstRow.split(",")[0]!;
+
+    expect(openTime).toBe(
+      trades[0]!.openTime.toISOString().slice(0, 19).replace("T", " ").replace(/-/g, "."),
+    );
+  });
+
+  // The point of the EET fixture: the offset is not constant across the file,
+  // and nothing in the file says so. A parser that reads one offset for the
+  // whole export gets every post-March row wrong by an hour.
+  it("shifts the offset across a DST boundary", () => {
+    // 2026-03-29 is when Europe/Athens goes EET (+02:00) -> EEST (+03:00).
+    const winter = new Date("2026-02-10T12:00:00Z");
+    const summer = new Date("2026-05-10T12:00:00Z");
+
+    const trade = generateTrades({ count: 1 })[0]!;
+    const at = (when: Date) =>
+      toMt5Csv([{ ...trade, openTime: when, closeTime: when }], {
+        serverTimezone: "Europe/Athens",
+      })
+        .trim()
+        .split("\n")[1]!
+        .split(",")[0]!;
+
+    expect(at(winter)).toBe("2026.02.10 14:00:00"); // +02:00
+    expect(at(summer)).toBe("2026.05.10 15:00:00"); // +03:00
+  });
+
+  it("emits the same instants under both timezones", () => {
+    // Same trades, two server timezones. The wall-clock strings differ; the
+    // instants they denote must not. This is the invariant an import has to
+    // preserve, and the reason both fixtures are generated from one array.
+    const trades = generateTrades({ count: 20 });
+    const utc = toMt5Csv(trades).trim().split("\n").slice(1);
+    const eet = toMt5Csv(trades, { serverTimezone: "Europe/Athens" }).trim().split("\n").slice(1);
+
+    expect(eet).toHaveLength(utc.length);
+    for (let i = 0; i < utc.length; i += 1) {
+      // Column 0 is the open time and differs by the offset...
+      expect(eet[i]!.split(",")[0]).not.toBe(utc[i]!.split(",")[0]);
+      // ...but everything from the ticket onward is byte-identical.
+      expect(eet[i]!.split(",").slice(1, 8).join(",")).toBe(
+        utc[i]!.split(",").slice(1, 8).join(","),
+      );
+    }
+  });
+
   it("pads prices to the symbol's quoted precision", () => {
     const trades = generateTrades({ count: 60 });
     const rows = toMt5Csv(trades).trim().split("\n").slice(1);

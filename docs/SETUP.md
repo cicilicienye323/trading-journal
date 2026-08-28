@@ -130,8 +130,67 @@ tulis nanti diuji dengan bentuk yang beneran, bukan bentuk yang enak.
 Modul ini **berhenti di situ**. Nggak ada perhitungan win rate, R multiple,
 profit factor, atau equity curve di sini — itu bagian kamu.
 
-**`npm run fixtures`** menulis `fixtures/mt5-history.csv` (180 trade, ~54% win
-rate). File itu di-commit, dan CI ngecek ulang bahwa hasil generate masih sama.
+**`npm run fixtures`** menulis **dua** file dari 180 trade yang sama:
+
+| File                  | Server timezone | Gunanya                                          |
+| --------------------- | --------------- | ------------------------------------------------ |
+| `mt5-history.csv`     | UTC             | Kasus gampang — jam di file = instant sebenarnya |
+| `mt5-history-eet.csv` | `Europe/Athens` | Kasus nyata — offset berubah di tengah file      |
+
+Dua-duanya di-commit, dan CI ngecek ulang hasil generate-nya masih sama persis.
+
+### Kenapa ada versi EET, dan kenapa itu penting
+
+Export MT5 nulis jam pakai **waktu lokal server broker**, dan **nggak nyantumin
+offset atau nama timezone sama sekali** di file. Itu inti masalahnya: string jam
+yang sama berarti instant yang beda tergantung broker mana yang ngeluarin, dan
+nggak ada apa pun di file yang ngasih tahu yang mana.
+
+Mayoritas broker retail jalan di EET/EEST. Artinya file yang sama punya offset
+`+02:00` di Februari dan `+03:00` di April — **berubah di tengah file**, tanpa
+penanda. Contoh baris nyata dari dua fixture di atas (ticket sama):
+
+```
+50000075   UTC=2026.03.15 22:18:10   EET=2026.03.16 00:18:10   (+2, tanggal geser!)
+50000090   UTC=2026.04.03 13:12:45   EET=2026.04.03 16:12:45   (+3)
+```
+
+Perhatikan baris pertama: tanggalnya **pindah hari**. Itu persis bug yang bikin
+"trade Jumat malam kecatat hari Sabtu" dan statistik per-hari ambyar.
+
+Parser yang baca satu offset buat seluruh file bakal salah satu jam di semua
+baris setelah akhir Maret — **tanpa satu pun error**. Dua fixture ini bikin
+jalur itu keuji beneran, bukan cuma di unit test dengan input buatan.
+
+**Invarian yang harus dipegang:** dua file itu digenerate dari array trade yang
+sama. Jadi kalau kamu import masing-masing ke account dengan `server_timezone`
+yang cocok, **instant yang tersimpan di database harus identik**. Kalau beda,
+konversi timezone-mu salah. Itu assertion paling berguna yang bisa kamu tulis
+buat fitur import.
+
+### Angka referensi fixture
+
+Diverifikasi terpisah oleh Tech Lead (saldo awal 10.000, account UTC):
+
+| Metrik              | Nilai          |
+| ------------------- | -------------- |
+| Trades / win / loss | 180 / 98 / 82  |
+| Win rate            | 54,44%         |
+| Profit factor       | 2,2324         |
+| Net P&L             | 8.095,46       |
+| Avg R               | +0,4552        |
+| Max drawdown        | 578,61 (3,98%) |
+
+Angka-angka ini **sengaja nggak dihitung ulang di test** — ngitungnya itu justru
+bagian yang kamu pelajari (§5.3 di spec). Yang jagain angka-angka ini tetap sama
+adalah gate determinisme fixture di CI: kalau byte file-nya nggak berubah,
+metriknya juga nggak mungkin berubah. Pakai tabel ini buat ngecek hasil
+kalkulatormu sendiri waktu sudah nulis.
+
+**Yang nggak ada di fixture ini:** nggak ada satu pun baris dengan SL = 0, jadi
+jalur "trade tanpa stop loss → R = NULL" nggak keuji dari sini. Edge case itu
+sengaja ditulis tangan di `fixtures/edge-cases.csv` — mikirin kasusnya sendiri
+itu bagian dari belajarnya.
 
 ## CI
 

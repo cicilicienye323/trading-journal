@@ -100,7 +100,7 @@ src/
 scripts/            # seed + generator fixture
 services/
   price-worker/     # kerangka service Go (Proyek 2)
-fixtures/           # contoh export MT5, di-commit
+fixtures/           # export MT5 demo (UTC + EET), di-commit
 docs/
   SETUP.md          # penjelasan tiap file config
   DEPLOY.md         # langkah Vercel + Neon + Fly.io

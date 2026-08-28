@@ -10,6 +10,8 @@
  * broker statement whose Profit column disagrees with its own prices is not a
  * useful fixture to test a parser against.
  */
+import { formatInTimeZone } from "date-fns-tz";
+
 import { getInstrument, roundToDigits, type Instrument } from "./instruments";
 import { createRng, normal, pick, randomInt } from "./random";
 
@@ -195,13 +197,20 @@ export function generateTrades(options: GenerateTradesOptions = {}): GeneratedTr
   return trades.sort((a, b) => a.openTime.getTime() - b.openTime.getTime());
 }
 
-/** MT5 renders timestamps as "YYYY.MM.DD HH:MM:SS" in the server's timezone. */
-function formatMt5Time(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${date.getUTCFullYear()}.${pad(date.getUTCMonth() + 1)}.${pad(date.getUTCDate())} ` +
-    `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`
-  );
+/**
+ * MT5 writes timestamps as "YYYY.MM.DD HH:MM:SS" in the *broker server's* local
+ * time, with **no offset and no timezone name anywhere in the file**. That
+ * omission is the whole problem: the same wall-clock string means a different
+ * instant depending on which broker exported it, and nothing in the file says
+ * which.
+ *
+ * `serverTimezone` picks the zone the fixture is rendered in. It defaults to
+ * UTC, which produces the simple case; pass an IANA zone like "Europe/Athens"
+ * to produce a file from a typical EET/EEST broker, where the offset silently
+ * changes at the DST boundary partway through the export.
+ */
+function formatMt5Time(date: Date, serverTimezone: string): string {
+  return formatInTimeZone(date, serverTimezone, "yyyy.MM.dd HH:mm:ss");
 }
 
 /**
@@ -211,8 +220,23 @@ function formatMt5Time(date: Date): string {
  * built against the actual shape, not a convenient invented one. Prices are
  * padded to the symbol's digit count because MT5 emits trailing zeros and a
  * naive parser that trims them will disagree with the broker's own file.
+ *
+ * Note the header has **duplicate column names** — "Time" at index 0 and 8,
+ * "Price" at 5 and 9. That is what the real export looks like, and it means a
+ * parser cannot map columns by name. Building a lookup with something like
+ * `Object.fromEntries(zip(header, row))` silently overwrites the open price
+ * with the close price and every downstream statistic is wrong with no error
+ * raised. Parse by position.
+ *
+ * `serverTimezone` controls the wall-clock the timestamps are rendered in.
+ * Default UTC. Pass "Europe/Athens" for a file whose offset changes at a DST
+ * boundary — see `toMt5Csv` timezone note above.
  */
-export function toMt5Csv(trades: readonly GeneratedTrade[]): string {
+export function toMt5Csv(
+  trades: readonly GeneratedTrade[],
+  options: { serverTimezone?: string } = {},
+): string {
+  const { serverTimezone = "UTC" } = options;
   const header = [
     "Time",
     "Position",
@@ -234,7 +258,7 @@ export function toMt5Csv(trades: readonly GeneratedTrade[]): string {
     const price = (value: number) => value.toFixed(digits);
 
     return [
-      formatMt5Time(trade.openTime),
+      formatMt5Time(trade.openTime, serverTimezone),
       trade.ticket,
       trade.symbol,
       trade.direction,
@@ -242,7 +266,7 @@ export function toMt5Csv(trades: readonly GeneratedTrade[]): string {
       price(trade.openPrice),
       price(trade.stopLoss),
       price(trade.takeProfit),
-      formatMt5Time(trade.closeTime),
+      formatMt5Time(trade.closeTime, serverTimezone),
       price(trade.closePrice),
       trade.commission.toFixed(2),
       trade.swap.toFixed(2),
