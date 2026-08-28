@@ -2,25 +2,59 @@
   "name": "fintech-app-template",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "db:generate": "dotenv -e .env.local -- drizzle-kit generate",
+    "db:migrate": "dotenv -e .env.local -- drizzle-kit migrate",
+    "db:migrate:ci": "drizzle-kit migrate",
+    "db:studio": "dotenv -e .env.local -- drizzle-kit studio",
+    "db:seed": "dotenv -e .env.local -- tsx scripts/seed.ts",
+    "fixtures": "tsx scripts/generate-fixtures.ts",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test"
   },
   "dependencies": {
+    "drizzle-orm": "^0.45.2",
     "next": "16.3.3",
+    "postgres": "^3.4.9",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.6",
+    "@types/node": "^20.19.43",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
+    "dotenv-cli": "^11.0.0",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.39.5",
     "eslint-config-next": "16.3.3",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "eslint-config-prettier": "^10.1.8",
+    "jsdom": "^29.1.1",
+    "prettier": "^3.9.6",
+    "prettier-plugin-tailwindcss": "^0.8.1",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
   }
 }

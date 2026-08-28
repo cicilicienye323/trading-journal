@@ -30,8 +30,12 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — never commit real secrets...
 .env*
+# ...but .env.example documents which variables the app needs, so it has to be
+# committed. Without this exception a fresh clone has no way to know what to
+# put in .env.local.
+!.env.example
 
 # vercel
 .vercel

@@ -1,0 +1,32 @@
+# Fly.io config for the Go price worker (Project 2).
+# Rename the app before the first `fly launch`.
+
+app = "fx-price-worker"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # A price poller holding a WebSocket must not be suspended between HTTP
+  # requests — that's the whole reason this service isn't on Vercel.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

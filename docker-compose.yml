@@ -1,0 +1,26 @@
+# Local Postgres for development and tests.
+#
+# Deliberately the same major version as Neon (16) so a migration that applies
+# locally applies in production too. Data lives in a named volume, so
+# `docker compose down` keeps it and `docker compose down -v` wipes it.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: fintech_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fintech_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fintech_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
