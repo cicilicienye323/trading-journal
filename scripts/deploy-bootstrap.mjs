@@ -37,7 +37,14 @@ const NAME = getArg("--name", "trading-journal");
 const REGION = getArg("--region", "aws-ap-southeast-1"); // Singapore
 const PG_VERSION = Number(getArg("--pg", "16")); // matches docker-compose.yml
 const SKIP = new Set((getArg("--skip", "") || "").split(",").filter(Boolean));
-const STATE_FILE = ".deploy-state.json"; // gitignored; lets re-runs resume
+const DRY_RUN = args.includes("--dry-run");
+const STATE_FILE = getArg("--state", ".deploy-state.json"); // gitignored; lets re-runs resume
+
+// Overridable so the success paths can be exercised against a mock server
+// (scripts/deploy-bootstrap.test.mjs). Nothing else should ever set these.
+const NEON_API = process.env.NEON_API_BASE || "https://console.neon.tech";
+const GITHUB_API = process.env.GITHUB_API_BASE || "https://api.github.com";
+const VERCEL_API = process.env.VERCEL_API_BASE || "https://api.vercel.com";
 
 const c = {
   dim: (s) => `\x1b[2m${s}\x1b[0m`,
@@ -65,6 +72,9 @@ async function api(
   url,
   { token, method = "GET", body, headers = {}, tokenScheme = "Bearer" } = {},
 ) {
+  // Belt and braces: --dry-run is a read-only preflight, so a mutating request
+  // reaching this point is a bug, not something to paper over.
+  if (DRY_RUN && method !== "GET") die(`--dry-run attempted a ${method} to ${url}`);
   const res = await fetch(url, {
     method,
     headers: {
@@ -115,7 +125,7 @@ async function neon() {
     );
 
   // Idempotent: reuse a project with this name if it already exists.
-  const list = await api("https://console.neon.tech/api/v2/projects", { token });
+  const list = await api(`${NEON_API}/api/v2/projects`, { token });
   if (list.status === 401)
     die(
       "Neon rejected the API key (401).",
@@ -130,7 +140,7 @@ async function neon() {
     // Creating a project returns the connection URI once; listing does not.
     // Re-derive it from the project's roles + endpoints.
     const detail = await api(
-      `https://console.neon.tech/api/v2/projects/${project.id}/connection_uri` +
+      `${NEON_API}/api/v2/projects/${project.id}/connection_uri` +
         `?database_name=neondb&role_name=neondb_owner&pooled=true`,
       { token },
     );
@@ -144,7 +154,7 @@ async function neon() {
       );
     }
   } else {
-    const created = await api("https://console.neon.tech/api/v2/projects", {
+    const created = await api(`${NEON_API}/api/v2/projects`, {
       token,
       method: "POST",
       body: { project: { name: NAME, pg_version: PG_VERSION, region_id: REGION } },
@@ -205,7 +215,7 @@ async function github() {
       "Create a classic PAT with the 'repo' scope at https://github.com/settings/tokens",
     );
 
-  const me = await api("https://api.github.com/user", {
+  const me = await api(`${GITHUB_API}/user`, {
     token,
     headers: { Accept: "application/vnd.github+json" },
   });
@@ -213,11 +223,11 @@ async function github() {
   const owner = me.json.login;
   ok(`authenticated as ${owner}`);
 
-  const existing = await api(`https://api.github.com/repos/${owner}/${NAME}`, { token });
+  const existing = await api(`${GITHUB_API}/repos/${owner}/${NAME}`, { token });
   if (existing.res.ok) {
     info(`repo ${owner}/${NAME} already exists — reusing`);
   } else {
-    const created = await api("https://api.github.com/user/repos", {
+    const created = await api(`${GITHUB_API}/user/repos`, {
       token,
       method: "POST",
       // auto_init false: an empty repo is required, or the first push is
@@ -237,6 +247,11 @@ async function github() {
   state.owner = owner;
   state.repo = `${owner}/${NAME}`;
   saveState();
+
+  if (SKIP.has("push")) {
+    info("push skipped (--skip push)");
+    return;
+  }
 
   // Push over an ephemeral tokenised URL so the PAT never lands in .git/config.
   const cleanUrl = `https://github.com/${owner}/${NAME}.git`;
@@ -307,13 +322,13 @@ async function vercel() {
   if (!token) die("VERCEL_TOKEN is not set.", "Create one at https://vercel.com/account/tokens");
   const teamQ = process.env.VERCEL_TEAM_ID ? `?teamId=${process.env.VERCEL_TEAM_ID}` : "";
 
-  const existing = await api(`https://api.vercel.com/v9/projects/${NAME}${teamQ}`, { token });
+  const existing = await api(`${VERCEL_API}/v9/projects/${NAME}${teamQ}`, { token });
   let project;
   if (existing.res.ok) {
     project = existing.json;
     info(`reusing Vercel project "${NAME}"`);
   } else {
-    const created = await api(`https://api.vercel.com/v11/projects${teamQ}`, {
+    const created = await api(`${VERCEL_API}/v11/projects${teamQ}`, {
       token,
       method: "POST",
       body: {
@@ -356,7 +371,7 @@ async function vercel() {
   for (const v of vars) {
     if (!v.value) die(`Refusing to set empty ${v.key} on Vercel.`);
     const r = await api(
-      `https://api.vercel.com/v10/projects/${project.id}/env${teamQ ? teamQ + "&" : "?"}upsert=true`,
+      `${VERCEL_API}/v10/projects/${project.id}/env${teamQ ? teamQ + "&" : "?"}upsert=true`,
       {
         token,
         method: "POST",
@@ -376,21 +391,18 @@ async function vercel() {
 
   // Trigger a production deploy from main.
   const repoId = project.link?.repoId;
-  const dep = await api(
-    `https://api.vercel.com/v13/deployments${teamQ ? teamQ + "&" : "?"}forceNew=1`,
-    {
-      token,
-      method: "POST",
-      body: {
-        name: NAME,
-        project: project.id,
-        target: "production",
-        gitSource: repoId
-          ? { type: "github", repoId, ref: "main" }
-          : { type: "github", org: state.owner, repo: NAME, ref: "main" },
-      },
+  const dep = await api(`${VERCEL_API}/v13/deployments${teamQ ? teamQ + "&" : "?"}forceNew=1`, {
+    token,
+    method: "POST",
+    body: {
+      name: NAME,
+      project: project.id,
+      target: "production",
+      gitSource: repoId
+        ? { type: "github", repoId, ref: "main" }
+        : { type: "github", org: state.owner, repo: NAME, ref: "main" },
     },
-  );
+  });
   if (!dep.res.ok) {
     warn(`Could not trigger a deploy automatically (${dep.status}).`);
     info("Env vars are set. Push any commit, or hit Redeploy in the dashboard.");
@@ -432,7 +444,9 @@ function seed() {
 
 async function verify() {
   step("Verify — /api/health");
-  const url = state.prodUrl || process.env.PROD_URL;
+  if (SKIP.has("verify")) return info("skipped (--skip verify)");
+  // PROD_URL wins so a custom domain can be checked instead of the .vercel.app one.
+  const url = process.env.PROD_URL || state.prodUrl;
   if (!url) return info("no production URL known yet; check the Vercel dashboard");
 
   info(`polling ${url}/api/health (builds take ~1-2 min)`);
@@ -460,12 +474,72 @@ async function verify() {
 }
 
 // ---------------------------------------------------------------------------
+// --dry-run — read-only preflight
+// ---------------------------------------------------------------------------
+
+/**
+ * Answers "will this work, and what already exists?" without creating anything.
+ *
+ * Worth running first when the tokens belong to someone else, or when a previous
+ * run half-succeeded: a bad token surfaces here rather than after a Neon project
+ * has already been created.
+ */
+async function preflight() {
+  let fatal = 0;
+  const check = async (label, url, token, hint, tokenScheme = "Bearer") => {
+    step(label);
+    if (!token) {
+      warn(`not set — ${hint}`);
+      return void fatal++;
+    }
+    const r = await api(url, { token, tokenScheme });
+    if (r.res.ok) return ok(`token valid`);
+    warn(`rejected (${r.status}) — ${hint}`);
+    fatal++;
+  };
+
+  await check(
+    "Neon — NEON_API_KEY",
+    `${NEON_API}/api/v2/projects`,
+    process.env.NEON_API_KEY,
+    "console.neon.tech > Settings > API keys",
+  );
+  await check(
+    "GitHub — GITHUB_TOKEN",
+    `${GITHUB_API}/user`,
+    process.env.GITHUB_TOKEN,
+    "github.com/settings/tokens, needs repo create + contents write",
+  );
+  await check(
+    "Vercel — VERCEL_TOKEN",
+    `${VERCEL_API}/v2/user`,
+    process.env.VERCEL_TOKEN,
+    "vercel.com/account/tokens",
+  );
+
+  step("Existing resources");
+  info(`would use project name "${NAME}" (pg ${PG_VERSION}, ${REGION})`);
+  info(state.databaseUrl ? `resume state present: ${hostOf(state.databaseUrl)}` : "no prior state");
+
+  console.log(
+    fatal
+      ? `\n${c.yellow(`${fatal} credential problem(s) — fix before running for real.`)}\n`
+      : `\n${c.green("Preflight clean. Re-run without --dry-run to deploy.")}\n`,
+  );
+  process.exit(fatal ? 1 : 0);
+}
 
 async function main() {
   console.log(
     c.bold(`\nFirst-deploy bootstrap — ${NAME}\n`) +
-      c.dim("Equivalent to docs/FIRST-DEPLOY.md. Safe to re-run.\n"),
+      c.dim(
+        DRY_RUN
+          ? "DRY RUN — read-only preflight, nothing will be created.\n"
+          : "Equivalent to docs/FIRST-DEPLOY.md. Safe to re-run.\n",
+      ),
   );
+
+  if (DRY_RUN) return preflight();
 
   await neon();
   await github();
