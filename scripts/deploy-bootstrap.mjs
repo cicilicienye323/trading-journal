@@ -422,9 +422,24 @@ async function vercel() {
     return;
   }
   state.deployUrl = `https://${dep.json.url}`;
-  state.prodUrl = `https://${NAME}.vercel.app`;
+
+  // Never guess `<name>.vercel.app`. That domain is global and first-come:
+  // "trading-journal.vercel.app" already belongs to a stranger, so guessing it
+  // means polling someone else's site — reporting their 404 as our failure, or
+  // worse, their 200 as our success. Ask Vercel which host is actually ours.
+  const alias = await api(`${VERCEL_API}/v9/projects/${project.id}${teamQ}`, { token });
+  const prodAlias = alias.res.ok
+    ? alias.json?.targets?.production?.alias?.find((a) => a.endsWith(".vercel.app")) ||
+      alias.json?.alias?.find?.((a) => (typeof a === "string" ? a : a?.domain))
+    : null;
+  const aliasHost = typeof prodAlias === "string" ? prodAlias : prodAlias?.domain;
+
+  // Fall back to the deployment URL, which the API just handed us and which
+  // unambiguously points at this deployment.
+  state.prodUrl = aliasHost ? `https://${aliasHost}` : state.deployUrl;
   saveState();
   ok(`deploy queued: ${state.deployUrl}`);
+  info(`will verify against ${state.prodUrl}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -436,17 +451,38 @@ function seed() {
   if (SKIP.has("seed")) return info("skipped (--skip seed)");
   const url = state.databaseUrl || process.env.DATABASE_URL;
   if (!url) die("No DATABASE_URL available for seeding.");
+
+  // The seed imports src/db, which imports src/env, which validates the WHOLE
+  // schema at module load. So the seed needs the auth variables present even
+  // though it never authenticates anything. Passing only DATABASE_URL makes it
+  // die on BETTER_AUTH_SECRET before it opens a single connection.
+  //
+  // SKIP_ENV_VALIDATION would also silence it, but that would stop validating
+  // DATABASE_URL too — and a malformed connection string is exactly what this
+  // step needs caught early, as a named error rather than a driver stack trace.
+  const authSecret =
+    state.betterAuthSecret ||
+    // Only reachable with --skip vercel, where no secret was ever generated.
+    // Never persisted and never used to sign anything: the seed writes rows,
+    // it does not issue sessions. It exists solely to satisfy the validator.
+    `ephemeral-seed-only-${randomBytes(24).toString("base64url")}`;
+
   try {
     execFileSync("npx", ["tsx", "scripts/seed.ts"], {
       stdio: "inherit",
-      env: { ...process.env, DATABASE_URL: url },
+      env: {
+        ...process.env,
+        DATABASE_URL: url,
+        BETTER_AUTH_SECRET: authSecret,
+        BETTER_AUTH_URL: state.prodUrl || state.deployUrl || "http://localhost:3000",
+        DEMO_EMAIL: process.env.DEMO_EMAIL || "demo@example.com",
+      },
     });
     ok("seed complete");
   } catch {
-    die(
-      "Seed failed.",
-      "Migrations must succeed first — a missing table shows up here as a seed error.",
-    );
+    // Deliberately not guessing a cause. The child's own output is printed
+    // above via stdio:inherit, and an invented explanation buries it.
+    die("Seed failed — see the error above.");
   }
 }
 

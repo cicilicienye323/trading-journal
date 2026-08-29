@@ -82,6 +82,14 @@ function startMock() {
       if (p === VERCEL_ENV_PATH && req.method === "POST") return send(201, { created: 1 });
       if (p === "/v13/deployments" && req.method === "POST")
         return send(200, { url: "trading-journal-abc123.vercel.app" });
+      // Second GET of the project, after the deploy: carries the real alias.
+      // Deliberately NOT "trading-journal.vercel.app" — that host belongs to
+      // someone else, and guessing it is the bug this pins down.
+      if (p === "/v9/projects/prj_test")
+        return send(200, {
+          id: "prj_test",
+          targets: { production: { alias: ["trading-journal-cici.vercel.app"] } },
+        });
 
       send(404, { error: "unmocked", path: p });
     });
@@ -116,6 +124,9 @@ function run({ skip = "push,migrate,seed,verify", env = {}, args = [] } = {}) {
           NEON_API_BASE: base,
           GITHUB_API_BASE: base,
           VERCEL_API_BASE: base,
+          // vitest.config.mts sets this; inherited by the script AND by the
+          // seed it spawns, it would disable the validation these tests pin.
+          SKIP_ENV_VALIDATION: "",
           NEON_API_KEY: "neon-test",
           GITHUB_TOKEN: "gh-test",
           VERCEL_TOKEN: "vc-test",
@@ -143,6 +154,7 @@ let both;
 let directOnly;
 let ciRun;
 let noRepo;
+let seedRun;
 let preflightCI;
 let preflightBadGh;
 
@@ -178,6 +190,13 @@ beforeAll(async () => {
       GITHUB_TOKEN: "gh-actions-installation-token",
       GITHUB_REPOSITORY: "testuser/trading-journal",
     },
+  });
+
+  // Lets the seed step actually run. It cannot reach the fake Neon host, so it
+  // fails at connection — but only if it gets past env validation first.
+  seedRun = await run({
+    skip: "github,push,migrate,verify",
+    env: { GITHUB_REPOSITORY: "testuser/trading-journal" },
   });
 
   // Preflight when the github step really will run and its token is bad.
@@ -324,6 +343,24 @@ describe("CI path (--skip github, as the deploy workflow runs it)", () => {
   });
 });
 
+describe("production URL", () => {
+  it("uses the alias Vercel reports, not a guessed <name>.vercel.app", () => {
+    // trading-journal.vercel.app is a real site owned by someone else. Guessing
+    // it means verifying against a stranger's app: their 404 read as our
+    // failure, or their 200 as our success.
+    expect(both.state.prodUrl).toBe("https://trading-journal-cici.vercel.app");
+    expect(both.state.prodUrl).not.toBe("https://trading-journal.vercel.app");
+  });
+
+  it("asks Vercel for the project after deploying", () => {
+    expect(find(both.requests, "GET", "/v9/projects/prj_test")).toBeDefined();
+  });
+
+  it("records the deployment URL too", () => {
+    expect(both.state.deployUrl).toBe("https://trading-journal-abc123.vercel.app");
+  });
+});
+
 describe("preflight (--dry-run)", () => {
   // The first real workflow run died here: preflight checked GITHUB_TOKEN even
   // though the run skipped the github step, and Actions' installation token
@@ -359,4 +396,71 @@ describe("secrets", () => {
     expect(both.output).not.toContain("neon-test");
     expect(both.output).not.toContain("vc-test");
   });
+});
+
+describe("seed step", () => {
+  // Regression: seed() passed only DATABASE_URL, so scripts/seed.ts died in
+  // src/env at module load — on BETTER_AUTH_SECRET, before touching the DB.
+  it("passes enough environment for src/env to validate", () => {
+    expect(seedRun.output).not.toContain("Invalid environment variables");
+    expect(seedRun.output).not.toContain("BETTER_AUTH_SECRET must be at least");
+  });
+
+  it("reaches the database layer and fails there instead", () => {
+    expect(seedRun.output).toContain("Seed failed");
+  });
+
+  it("does not invent a cause for the failure", () => {
+    // The child prints its own error; a guessed explanation buries it.
+    expect(seedRun.output).not.toContain("Migrations must succeed first");
+  });
+});
+
+describe("seed environment", () => {
+  // The reported failure: seed() passed only DATABASE_URL, but scripts/seed.ts
+  // imports src/db -> src/env, which validates the whole schema at module load.
+  // It died on BETTER_AUTH_SECRET before opening a single connection.
+  const runSeed = (env) =>
+    new Promise((resolve) => {
+      execFile(
+        "npx",
+        ["tsx", "scripts/seed.ts"],
+        {
+          encoding: "utf8",
+          // Port 1 refuses immediately, so a run that gets past validation
+          // fails fast on connection instead of hanging.
+          env: {
+            ...process.env,
+            // vitest.config.mts sets this for the test process. Inherited by
+            // the child it disables the very validation under test, which made
+            // the "gets past validation" case pass for the wrong reason.
+            SKIP_ENV_VALIDATION: "",
+            DATABASE_URL: "postgresql://u:p@127.0.0.1:1/none",
+            BETTER_AUTH_SECRET: "",
+            BETTER_AUTH_URL: "",
+            DEMO_EMAIL: "",
+            ...env,
+          },
+          timeout: 60000,
+        },
+        (err, stdout, stderr) => resolve((stdout || "") + (stderr || "")),
+      );
+    });
+
+  it("fails env validation when only DATABASE_URL is provided", async () => {
+    const out = await runSeed({});
+    expect(out).toContain("Invalid environment variables");
+    expect(out).toContain("BETTER_AUTH_SECRET");
+  }, 90000);
+
+  it("gets past validation with the variables seed() actually passes", async () => {
+    const out = await runSeed({
+      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_URL: "https://trading-journal-cici.vercel.app",
+      DEMO_EMAIL: "demo@example.com",
+    });
+    expect(out).not.toContain("Invalid environment variables");
+    // Reached the database layer, which is as far as it can get without one.
+    expect(out).toContain("Seed failed");
+  }, 90000);
 });
