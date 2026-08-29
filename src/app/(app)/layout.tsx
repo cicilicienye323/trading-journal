@@ -22,15 +22,40 @@
  */
 import { requireSession } from "@/lib/auth-guard";
 
+import Link from "next/link";
+
 import { SignOutButton } from "./sign-out-button";
+
+/**
+ * Plain `Link`s, with no active-state highlighting. Marking the current item
+ * would mean reading the pathname, which requires a Client Component and would
+ * pull this whole layout into the browser bundle for a purely cosmetic gain.
+ * Slice 5 can add it with a small client component around just the nav.
+ */
+const NAV = [
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/trades", label: "Trades" },
+  { href: "/accounts", label: "Accounts" },
+] as const;
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const { user } = await requireSession();
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-gray-200 px-6 py-3 dark:border-gray-800">
-        <span className="text-sm font-medium">Trading journal</span>
+      <header className="flex items-center justify-between gap-4 border-b border-gray-200 px-6 py-3 dark:border-gray-800">
+        <nav className="flex items-center gap-4">
+          <span className="text-sm font-medium">Trading journal</span>
+          {NAV.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="text-sm text-gray-500 hover:underline"
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-500">{user.email}</span>
           <SignOutButton />
