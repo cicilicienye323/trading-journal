@@ -524,8 +524,11 @@ async function verify() {
 
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(`${url}/api/health`, { cache: "no-store" });
-      const text = await res.text();
+      // redirect:"manual" so the SSO bounce stays visible. Following it lands
+      // on a vercel.com login page, whose 200 would otherwise read as an app
+      // that merely returned the wrong body.
+      const res = await fetch(`${url}/api/health`, { cache: "no-store", redirect: "manual" });
+      const text = res.status >= 300 && res.status < 400 ? "" : await res.text();
       let body = null;
       try {
         body = JSON.parse(text);
@@ -538,12 +541,17 @@ async function verify() {
         return true;
       }
 
-      // Deployment Protection answers every non-browser request with an HTML
-      // challenge. Retrying cannot clear it, and it is not an app fault — but
-      // it looks identical to "app is down" unless it is named.
+      // Deployment Protection has two shapes: a 401/403 HTML challenge, and a
+      // 302 to vercel.com/sso-api. Retrying clears neither, and both look like
+      // "app is down" unless named.
+      const ssoRedirect =
+        res.status >= 300 &&
+        res.status < 400 &&
+        /vercel\.com\/sso/i.test(res.headers.get("location") || "");
       if (
-        (res.status === 401 || res.status === 403) &&
-        /Vercel (Security|Authentication)/i.test(text)
+        ssoRedirect ||
+        ((res.status === 401 || res.status === 403) &&
+          /Vercel (Security|Authentication)/i.test(text))
       ) {
         protectedByVercel = true;
         break;

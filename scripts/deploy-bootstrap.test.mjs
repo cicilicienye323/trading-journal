@@ -160,6 +160,8 @@ let seedRun;
 let healthFails;
 let healthProtected;
 let protectedSrv;
+let healthSso;
+let ssoSrv;
 let preflightCI;
 let preflightBadGh;
 
@@ -219,6 +221,26 @@ beforeAll(async () => {
 
   // A URL behind Vercel Deployment Protection: HTML challenge, never JSON.
   // Retrying cannot clear it, so the poll must stop and say so.
+  // Deployment Protection has two shapes and each must be pinned on its own.
+  // An earlier version alternated them in one server, which let the 403 branch
+  // mask a missing 302 branch — removing the SSO check still passed.
+  ssoSrv = createServer((req, res) => {
+    res.writeHead(302, {
+      location: `https://vercel.com/sso-api?url=${encodeURIComponent("https://x.vercel.app" + req.url)}`,
+    });
+    res.end();
+  });
+  await new Promise((r) => ssoSrv.listen(0, "127.0.0.1", r));
+  healthSso = await run({
+    skip: "github,push,migrate,seed",
+    env: {
+      GITHUB_REPOSITORY: "testuser/trading-journal",
+      PROD_URL: `http://127.0.0.1:${ssoSrv.address().port}`,
+      HEALTH_ATTEMPTS: "20",
+      HEALTH_INTERVAL_MS: "5000",
+    },
+  });
+
   protectedSrv = createServer((_req, res) => {
     res.writeHead(403, { "Content-Type": "text/html" });
     res.end("<html><body>Vercel Security Checkpoint</body></html>");
@@ -245,6 +267,7 @@ beforeAll(async () => {
 afterAll(() => {
   server?.close();
   protectedSrv?.close();
+  ssoSrv?.close();
   if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -471,6 +494,13 @@ describe("Vercel Deployment Protection", () => {
 
   it("explains that no automated check can pass, and where to turn it off", () => {
     expect(healthProtected.output).toContain("Settings > Deployment Protection");
+  });
+
+  it("recognises the 302 bounce to vercel.com/sso on its own", () => {
+    // Following the redirect lands on a vercel.com page, which would otherwise
+    // look like an app returning the wrong body and get retried for 10 minutes.
+    expect(healthSso.output).toContain("Deployment Protection is blocking");
+    expect(healthSso.code).toBe(1);
   });
 
   it("still fails the run — a challenged URL is not a live one", () => {
