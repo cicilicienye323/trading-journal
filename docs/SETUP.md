@@ -59,8 +59,13 @@ sama dengan Neon, supaya migrasi yang jalan di lokal pasti jalan di produksi.
 - `docker compose down -v` — matikan **dan hapus datanya**
 
 **`src/db/schema.ts`** — definisi tabel. **Ini yang kamu isi tiap proyek.**
-Sekarang cuma ada tabel `healthcheck` biar pipeline migrasinya kebukti jalan.
-Hapus begitu tabel asli sudah ada.
+Isinya sekarang tabel `healthcheck` (biar pipeline migrasinya kebukti jalan —
+hapus bareng `/api/health` begitu tabel asli sudah ada) plus satu baris
+`export * from "./auth-schema"`.
+
+**`src/db/auth-schema.ts`** — 4 tabel Better Auth. Dipisah dari `schema.ts`
+justru supaya file yang kamu edit nggak pernah berisi hal yang nggak boleh kamu
+ubah. Detailnya di bagian [Auth](#auth-better-auth) di bawah.
 
 **`src/db/index.ts`** — koneksi database.
 
@@ -88,6 +93,63 @@ npm run db:migrate
 **Jangan pernah edit file migrasi yang sudah pernah dijalankan.** Bikin migrasi
 baru. Migrasi itu catatan sejarah; mengubah masa lalu bikin database kamu dan
 database produksi nggak sinkron tanpa ketahuan.
+
+## Auth (Better Auth)
+
+Dipasang di Slice 1a. Kamu nggak perlu ngubah apa pun di sini buat nulis fitur —
+tapi bakal ditanya waktu interview, jadi baca sekali.
+
+| File                                 | Isinya                                               |
+| ------------------------------------ | ---------------------------------------------------- |
+| `src/db/auth-schema.ts`              | 4 tabel Better Auth. **Nggak usah diedit.**          |
+| `src/lib/auth.ts`                    | Config server. Server-only.                          |
+| `src/lib/auth-client.ts`             | Client browser.                                      |
+| `src/lib/auth-guard.ts`              | `getSession()`, `requireSession()`, `safeReturnTo()` |
+| `src/app/api/auth/[...all]/route.ts` | Semua endpoint auth lewat sini.                      |
+| `src/app/(app)/layout.tsx`           | Gerbang: belum login → `/login`                      |
+
+**Route group.** Folder berkurung nggak masuk URL. Taruh halaman di
+`src/app/(app)/` dan dia otomatis terproteksi — `/dashboard`, `/trades`,
+`/import`, `/accounts` semuanya ke situ. Halaman publik di luar itu.
+
+**Yang paling penting, dan ini bahan jawaban interview:** layout `(app)`
+**bukan** batas otorisasi. Dia cuma nendang pengunjung yang belum login ke
+halaman login — itu kenyamanan navigasi. Server action itu **POST ke route,
+bukan render route**, jadi layout-nya nggak jalan buat server action. Batas yang
+sebenarnya ada di predikat query (spec §8.3):
+
+```ts
+// Selalu. Tanpa kecuali.
+where(and(eq(trades.userId, session.user.id), eq(trades.id, tradeId)));
+```
+
+Jadi aturannya: **tiap server action panggil `requireSession()` sendiri**, dan
+tiap query di-scope ke `session.user.id` sejak awal — bukan diambil dulu terus
+dicek belakangan.
+
+**Kenapa `user.id` itu `text`, bukan `uuid`:** Better Auth yang bikin id-nya, dan
+dia ngeluarin string. Foreign key kamu (`trades.user_id`, dll) ikut `text`.
+
+**Kalau habis `npm update`:** ada test yang nanya langsung ke library-nya tabel
+apa yang dia butuh (`src/db/auth-schema.test.ts`). Kalau merah, berarti Better
+Auth ganti skema — baca diff-nya, sesuaikan `auth-schema.ts`, generate migrasi
+baru. Jangan hapus test-nya; itu satu-satunya yang bikin drift ketahuan sebelum
+produksi.
+
+**Verifikasi cepat kalau auth kelihatan aneh:**
+
+```bash
+npm run db:up && npm run dev
+curl -si localhost:3000/dashboard | head -1        # harus 307 ke /login
+curl -s -X POST localhost:3000/api/auth/sign-up/email \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"a@b.com","password":"hunter2hunter2","name":"A"}'
+```
+
+> Catatan kalau kamu tes pakai `curl`: sign-out bakal balas **403
+> `MISSING_OR_NULL_ORIGIN`**. Itu **bukan bug** — proteksi CSRF nolak POST tanpa
+> header `Origin`. Browser selalu ngirim header itu. Tambahin
+> `-H 'Origin: http://localhost:3000'` kalau mau ngetes dari terminal.
 
 ## Test
 

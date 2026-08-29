@@ -1,18 +1,21 @@
 /**
  * Database schema.
  *
- * This file is intentionally near-empty. The real tables for each project are
- * defined by that project's spec — for Project 1 (Trading Journal) that lands
- * in VCI-3. Writing the schema is core work, not scaffolding.
+ * This is the file you write the project's tables in. The real tables for
+ * Project 1 (Trading Journal) are specified in VCI-3 §4 — `trading_accounts`,
+ * `trades`, `import_batches`, and the enums. Writing them is core work, not
+ * scaffolding, so they are deliberately not here yet.
  *
- * The one table below is here so `drizzle-kit generate` has something to
- * produce a migration from, which proves the migration pipeline works before
- * any real modelling starts. Delete it once real tables exist.
+ * The `healthcheck` table below is scaffolding: it exists so the migration
+ * pipeline had something to prove itself against before any real modelling
+ * started. `/api/health` still reads it, so delete it and that route together,
+ * once you have real tables.
  *
- * Naming trap to know before you start: Better Auth generates its own `user`,
- * `session`, `account`, and `verification` tables. Its `account` table holds
- * OAuth provider links — nothing to do with trading. So a broker account table
- * must be named `trading_accounts`, never `account`, or the two collide.
+ * Naming trap, and it is a real one: Better Auth already owns a table called
+ * `account` — it holds OAuth provider links and password hashes, nothing to do
+ * with trading. Your broker account table must be named `trading_accounts`,
+ * never `account`, or the two collide. Those tables live in `auth-schema.ts`
+ * and are re-exported below; you should not need to edit that file.
  *
  * Conventions worth keeping:
  * - `timestamp` columns use `withTimezone: true`. Trading data is timestamped
@@ -21,8 +24,17 @@
  * - Money and prices use `numeric`, never `double precision`. Floating point
  *   cannot represent 0.1 exactly, and rounding drift in a P&L column is the
  *   kind of bug that destroys trust in a finance app.
+ * - Foreign keys to the signed-in user are `text` referencing `user.id`, not
+ *   `uuid`. Better Auth generates string ids; spec §4.2 matches this.
  */
 import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+
+/**
+ * Better Auth's tables. Re-exported so drizzle-kit sees a single schema entry
+ * point and the Drizzle client has every table in scope — not because you need
+ * to touch them.
+ */
+export * from "./auth-schema";
 
 export const healthcheck = pgTable("healthcheck", {
   id: uuid("id").primaryKey().defaultRandom(),
