@@ -563,3 +563,32 @@ describe("vercel build configuration", () => {
     expect(cfg.build?.env?.SKIP_ENV_VALIDATION).toBeUndefined();
   });
 });
+
+describe("next.config output mode", () => {
+  // The Vercel build died in Vercel's own onBuildComplete step with
+  // ENOENT .next/next-server.js.nft.json. output:"standalone" rearranges the
+  // build output and is documented as a self-hosting/Docker feature; Vercel
+  // packages the standard layout itself. Leading suspect, not a proven cause —
+  // the failing step only runs on Vercel's infrastructure.
+  const outputFor = (env) =>
+    new Promise((resolve) => {
+      execFile(
+        "npx",
+        [
+          "tsx",
+          "-e",
+          "import c from './next.config.ts'; console.log(JSON.stringify(c.output ?? null))",
+        ],
+        { encoding: "utf8", env: { ...process.env, ...env }, timeout: 60000 },
+        (_e, stdout) => resolve(stdout.trim()),
+      );
+    });
+
+  it("disables standalone when building on Vercel", async () => {
+    expect(await outputFor({ VERCEL: "1" })).toBe("null");
+  }, 90000);
+
+  it("keeps standalone everywhere else — the Docker image needs it", async () => {
+    expect(await outputFor({ VERCEL: "" })).toBe('"standalone"');
+  }, 90000);
+});
