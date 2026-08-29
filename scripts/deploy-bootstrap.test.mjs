@@ -157,6 +157,7 @@ let directOnly;
 let ciRun;
 let noRepo;
 let seedRun;
+let healthFails;
 let preflightCI;
 let preflightBadGh;
 
@@ -199,6 +200,19 @@ beforeAll(async () => {
   seedRun = await run({
     skip: "github,push,migrate,verify",
     env: { GITHUB_REPOSITORY: "testuser/trading-journal" },
+  });
+
+  // Runs verify() against a dead port so the health poll genuinely fails.
+  // A workflow that exits 0 here would report a dead deployment as success.
+  neonUris = [DIRECT, POOLED];
+  healthFails = await run({
+    skip: "github,push,migrate,seed",
+    env: {
+      GITHUB_REPOSITORY: "testuser/trading-journal",
+      PROD_URL: "http://127.0.0.1:1",
+      HEALTH_ATTEMPTS: "2",
+      HEALTH_INTERVAL_MS: "10",
+    },
   });
 
   // Preflight when the github step really will run and its token is bad.
@@ -408,6 +422,24 @@ describe("secrets", () => {
     expect(both.output).not.toContain("gh-test");
     expect(both.output).not.toContain("neon-test");
     expect(both.output).not.toContain("vc-test");
+  });
+});
+
+describe("health verification", () => {
+  it("exits non-zero when /api/health never goes healthy", () => {
+    // Otherwise the workflow is green while the deployment serves nothing —
+    // a dead link that looks verified, which is the whole failure this
+    // script exists to prevent.
+    expect(healthFails.code).toBe(1);
+  });
+
+  it("says which URL it checked", () => {
+    expect(healthFails.output).toContain("never returned healthy");
+    expect(healthFails.output).toContain("127.0.0.1:1");
+  });
+
+  it("makes clear nothing is lost", () => {
+    expect(healthFails.output).toContain("re-running reuses every resource");
   });
 });
 

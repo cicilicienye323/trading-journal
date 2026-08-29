@@ -514,8 +514,13 @@ async function verify() {
   const url = process.env.PROD_URL || state.prodUrl;
   if (!url) return info("no production URL known yet; check the Vercel dashboard");
 
+  // Bounded so the failure path is testable without a ten-minute wait. Nothing
+  // but the test suite should set these.
+  const attempts = Number(process.env.HEALTH_ATTEMPTS || 40);
+  const interval = Number(process.env.HEALTH_INTERVAL_MS || 15000);
+
   info(`polling ${url}/api/health (builds take ~1-2 min)`);
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < attempts; i++) {
     try {
       const res = await fetch(`${url}/api/health`, { cache: "no-store" });
       const body = await res.json().catch(() => null);
@@ -529,9 +534,9 @@ async function verify() {
     } catch {
       /* deployment not resolvable yet */
     }
-    await new Promise((r) => setTimeout(r, 15000));
+    await new Promise((r) => setTimeout(r, interval));
   }
-  warn("health check did not go green within 10 minutes.");
+  warn(`health check did not go green after ${attempts} attempts.`);
   info(
     "See the troubleshooting table in docs/FIRST-DEPLOY.md — start with 'migrations not applied'.",
   );
@@ -637,6 +642,21 @@ async function main() {
   if (green) {
     console.log(
       c.green("\nDone. Open the URL in incognito to confirm a stranger sees the same thing.\n"),
+    );
+    return;
+  }
+
+  // green === false means verify() actually polled and never got a healthy
+  // answer. Exiting 0 there would report a dead deployment as a success, and
+  // the entire point of this script is not putting a dead link on a CV.
+  // (undefined means the step was skipped or no URL was known — not a failure.)
+  if (green === false) {
+    die(
+      "Deployed, but /api/health never returned healthy.",
+      `Checked ${state.prodUrl}\n` +
+        "Nothing here is lost — re-running reuses every resource. Start with the\n" +
+        "troubleshooting table in docs/FIRST-DEPLOY.md; the usual cause is\n" +
+        "migrations not applied, or DATABASE_URL missing on the Production target.",
     );
   }
 }

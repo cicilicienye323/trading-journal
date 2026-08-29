@@ -111,6 +111,18 @@ jobs:
             --region "${{ inputs.region }}" \
             --skip github
 
+      # Reads the URL Vercel actually assigned, before the state file is
+      # scrubbed. Never print "<project>.vercel.app": that domain is global and
+      # first-come, so for any taken name it points at a stranger's site — which
+      # is exactly what happened here, sending someone to another project's 404.
+      # Runs on failure too, so a partial run still says where to look.
+      - name: Capture the deployed URL
+        id: deployed
+        if: always() && !inputs.dry_run
+        run: |
+          url=$(node -e "try{process.stdout.write(JSON.parse(require('fs').readFileSync('.deploy-state.json','utf8')).prodUrl||'')}catch{}")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
       # .deploy-state.json holds the live connection string and the generated
       # auth secret. It stays on the ephemeral runner and is never uploaded as
       # an artifact — an artifact is downloadable by anyone with repo read.
@@ -119,11 +131,19 @@ jobs:
         run: rm -f .deploy-state.json
 
       - name: Where to look next
-        if: ${{ !inputs.dry_run }}
+        if: always() && !inputs.dry_run
         run: |
-          echo "### Deploy bootstrap finished" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Health: https://${{ inputs.project_name }}.vercel.app/api/health" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Expect \`{\"status\":\"ok\",\"database\":\"reachable\"}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Revoke \`NEON_API_KEY\` and \`VERCEL_TOKEN\` once the URL is live — this is a one-time provisioning step." >> "$GITHUB_STEP_SUMMARY"
+          url="${{ steps.deployed.outputs.url }}"
+          {
+            echo "### Deploy bootstrap finished"
+            echo ""
+            if [ -n "$url" ]; then
+              echo "- Health: $url/api/health"
+              echo "- Expect \`{\"status\":\"ok\",\"database\":\"reachable\"}\`"
+            else
+              echo "- No deployment URL was recorded — the run stopped before Vercel."
+              echo "- Read the job log above; do not guess a \`.vercel.app\` hostname."
+            fi
+            echo ""
+            echo "Revoke \`NEON_API_KEY\` and \`VERCEL_TOKEN\` once the URL is live — this is a one-time provisioning step."
+          } >> "$GITHUB_STEP_SUMMARY"
