@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 
 /**
@@ -130,8 +131,22 @@ export function resolveAuthUrl(raw: RawEnv): string | undefined {
  * hostnames Vercel itself reports for this deployment, not anything an attacker
  * supplies. A wildcard like `*.vercel.app` WOULD be a hole — anyone can deploy
  * there — which is exactly why this enumerates instead.
+ *
+ * ── And that STILL wasn't enough ──
+ * Vercel also serves the project at a `<project>-<team>.vercel.app` alias, and
+ * publishes that one in no environment variable at all. On this project the
+ * variables say `trading-journal-xi.vercel.app` while everyone actually visits
+ * `trading-journal-vcien.vercel.app`. Enumerating what the platform reports
+ * cannot cover a hostname the platform never reports.
+ *
+ * Hence `requestOrigin`: the origin the request was actually served on. Adding
+ * it makes the check "Origin must equal Host", which is not a weakening — it is
+ * the textbook CSRF defence, the same one Django and Rails apply. A browser
+ * cannot set `Host`: it derives it from the URL, and it only attaches cookies
+ * for that same URL. So a cross-site page can send `Origin: evil.example`, but
+ * it can never make `Host` agree with it while carrying your session.
  */
-export function resolveTrustedOrigins(raw: RawEnv): string[] {
+export function resolveTrustedOrigins(raw: RawEnv, requestOrigin?: string): string[] {
   const hosts = [raw.VERCEL_PROJECT_PRODUCTION_URL, raw.VERCEL_BRANCH_URL, raw.VERCEL_URL];
 
   const origins = hosts
@@ -139,12 +154,70 @@ export function resolveTrustedOrigins(raw: RawEnv): string[] {
     // Vercel omits the scheme; a bare host would never match an Origin header.
     .map((host) => (host.includes("://") ? host : `https://${host}`));
 
-  // The explicit/derived base URL last, so it is present even when running
-  // somewhere Vercel's variables don't exist at all (local, Docker, Fly).
+  // The explicit/derived base URL, so it is present even when running somewhere
+  // Vercel's variables don't exist at all (local, Docker, Fly).
   const authUrl = resolveAuthUrl(raw);
   if (authUrl) origins.push(authUrl);
 
+  if (requestOrigin) origins.push(requestOrigin);
+
   return [...new Set(origins.map((origin) => origin.replace(/\/+$/, "")))];
+}
+
+/**
+ * A short, non-reversible fingerprint of which database a connection string
+ * points at — host and database name only, never the credentials.
+ *
+ * This exists because "the migration workflow succeeded but the app says the
+ * table is missing" has exactly one likely cause — the two are pointing at
+ * different databases — and no safe way to check it. You cannot paste either
+ * connection string anywhere to compare them, and printing the host publicly
+ * invites exactly the kind of attention that cost this project a database
+ * already.
+ *
+ * Two matching fingerprints mean the same host and database name. They are a
+ * SHA-256 prefix, so they reveal nothing about either.
+ */
+export function databaseFingerprint(connectionString?: string): string | undefined {
+  if (!connectionString) return undefined;
+
+  try {
+    const url = new URL(connectionString);
+    // Host and path only. Username, password and query params are excluded —
+    // the point is to identify the database, not to describe how to reach it.
+    const identity = `${url.host}${url.pathname}`;
+    return createHash("sha256").update(identity).digest("hex").slice(0, 12);
+  } catch {
+    // A malformed URL would already have failed the schema check above; there
+    // is no useful fingerprint to report and this must never be the thing that
+    // takes the health route down.
+    return undefined;
+  }
+}
+
+/**
+ * The origin a request was served on, or undefined if it can't be determined.
+ *
+ * `x-forwarded-host` first because Vercel (and every other reverse proxy) puts
+ * the browser-visible hostname there while `host` may be an internal one.
+ *
+ * The scheme is assumed https unless the proxy says otherwise or the host is
+ * loopback — getting this wrong yields `http://…` where the browser sent
+ * `https://…`, and the exact-match comparison fails just as silently as having
+ * no entry at all.
+ */
+export function originOfRequest(request?: Request | null): string | undefined {
+  if (!request) return undefined;
+
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  if (!host) return undefined;
+
+  const isLoopback = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host);
+  const proto = request.headers.get("x-forwarded-proto") ?? (isLoopback ? "http" : "https");
+
+  // A comma-separated forwarded chain means several proxies appended to it;
+  // the first entry is the one closest to the browser.
+  return `${proto.split(",")[0].trim()}://${host.split(",")[0].trim()}`;
 }
 
 /**

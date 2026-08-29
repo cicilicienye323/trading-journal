@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseEnv, resolveTrustedOrigins } from "./env";
+import { databaseFingerprint, originOfRequest, parseEnv, resolveTrustedOrigins } from "./env";
 
 const VALID = {
   DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/fintech_dev",
@@ -205,6 +205,23 @@ describe("resolveTrustedOrigins", () => {
     expect(origins).toEqual(["https://app.com"]);
   });
 
+  it("trusts the alias Vercel serves but never reports", () => {
+    // The second failure, with the real values off the deployed app. Vercel's
+    // variables said trading-journal-xi; every human was on trading-journal-vcien.
+    // No amount of enumerating env vars reaches that hostname.
+    const raw = {
+      VERCEL_ENV: "production",
+      VERCEL_PROJECT_PRODUCTION_URL: "trading-journal-xi.vercel.app",
+      VERCEL_BRANCH_URL: "trading-journal-git-main-vcien.vercel.app",
+      VERCEL_URL: "trading-journal-5wsjjgz13-vcien.vercel.app",
+    } as never;
+
+    const browsed = "https://trading-journal-vcien.vercel.app";
+
+    expect(resolveTrustedOrigins(raw)).not.toContain(browsed);
+    expect(resolveTrustedOrigins(raw, browsed)).toContain(browsed);
+  });
+
   it("never returns a wildcard", () => {
     // "*.vercel.app" would make sign-in work everywhere — including from any
     // other person's Vercel deployment, which is the CSRF hole this avoids.
@@ -215,5 +232,95 @@ describe("resolveTrustedOrigins", () => {
     } as never);
 
     expect(origins.some((o) => o.includes("*"))).toBe(false);
+  });
+});
+
+describe("originOfRequest", () => {
+  const req = (headers: Record<string, string>) =>
+    new Request("https://internal.invalid/api/auth/sign-in/email", { headers });
+
+  it("prefers x-forwarded-host, which is the browser-visible name behind a proxy", () => {
+    expect(
+      originOfRequest(
+        req({
+          host: "internal-vercel-host",
+          "x-forwarded-host": "trading-journal-vcien.vercel.app",
+        }),
+      ),
+    ).toBe("https://trading-journal-vcien.vercel.app");
+  });
+
+  it("falls back to host when there is no proxy header", () => {
+    expect(originOfRequest(req({ host: "example.com" }))).toBe("https://example.com");
+  });
+
+  it("uses http for loopback, so local dev matches the browser", () => {
+    // Assuming https here would produce https://localhost:3000, which never
+    // equals the Origin the browser sent, and local login would break.
+    expect(originOfRequest(req({ host: "localhost:3000" }))).toBe("http://localhost:3000");
+    expect(originOfRequest(req({ host: "127.0.0.1:3000" }))).toBe("http://127.0.0.1:3000");
+  });
+
+  it("honours x-forwarded-proto over the loopback guess", () => {
+    expect(originOfRequest(req({ host: "example.com", "x-forwarded-proto": "http" }))).toBe(
+      "http://example.com",
+    );
+  });
+
+  it("takes the first entry when a proxy chain appended several", () => {
+    expect(
+      originOfRequest(
+        req({
+          "x-forwarded-host": "real.example.com, inner.example.com",
+          "x-forwarded-proto": "https, http",
+        }),
+      ),
+    ).toBe("https://real.example.com");
+  });
+
+  it("returns undefined rather than guessing when there is no request", () => {
+    expect(originOfRequest(undefined)).toBeUndefined();
+    expect(originOfRequest(null)).toBeUndefined();
+  });
+});
+
+describe("databaseFingerprint", () => {
+  it("is equal for the same host and database", () => {
+    const a = databaseFingerprint(
+      "postgresql://user:pass@ep-x-pooler.neon.tech/main?sslmode=require",
+    );
+    const b = databaseFingerprint("postgresql://other:different@ep-x-pooler.neon.tech/main");
+
+    // Same database reached with different credentials is still the same
+    // database — which is exactly the question being asked.
+    expect(a).toBe(b);
+  });
+
+  it("differs when the database name differs", () => {
+    // The failure it exists to catch: workflow migrated one branch, app reads another.
+    expect(databaseFingerprint("postgresql://u:p@ep-x.neon.tech/main")).not.toBe(
+      databaseFingerprint("postgresql://u:p@ep-x.neon.tech/staging"),
+    );
+  });
+
+  it("differs when the host differs", () => {
+    expect(databaseFingerprint("postgresql://u:p@ep-a.neon.tech/main")).not.toBe(
+      databaseFingerprint("postgresql://u:p@ep-b.neon.tech/main"),
+    );
+  });
+
+  it("leaks neither the password nor the host", () => {
+    const fp = databaseFingerprint("postgresql://admin:sup3rs3cret@ep-x-pooler.neon.tech/main");
+    expect(fp).not.toContain("sup3rs3cret");
+    expect(fp).not.toContain("admin");
+    expect(fp).not.toContain("neon");
+    expect(fp).toMatch(/^[0-9a-f]{12}$/);
+  });
+
+  it("returns undefined instead of throwing on junk", () => {
+    // Must never be the reason the health route reports the app as down.
+    expect(databaseFingerprint("not a url")).toBeUndefined();
+    expect(databaseFingerprint(undefined)).toBeUndefined();
+    expect(databaseFingerprint("")).toBeUndefined();
   });
 });

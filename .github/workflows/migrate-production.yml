@@ -88,6 +88,29 @@ jobs:
       - name: List committed migrations
         run: ls -1 src/db/migrations/*.sql
 
+      # The failure this catches actually happened: this workflow reported
+      # success while the app still said the tables were missing, because the
+      # secret here and Vercel's DATABASE_URL pointed at different databases.
+      # Nothing in either log could show that — the connection strings are
+      # secret and neither side prints one.
+      #
+      # This is a SHA-256 prefix of host + database name, with credentials
+      # excluded. It reveals nothing, and comparing it to `databaseFingerprint`
+      # in /api/health answers "did I migrate the database the app reads?" in
+      # one glance.
+      - name: Fingerprint the target database
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          node -e '
+            const { createHash } = require("node:crypto");
+            const u = new URL(process.env.DATABASE_URL);
+            const fp = createHash("sha256").update(`${u.host}${u.pathname}`).digest("hex").slice(0, 12);
+            console.log(`databaseFingerprint: ${fp}`);
+            console.log("Compare with /api/health on the deployed app. If they differ,");
+            console.log("this workflow is migrating a database the app never reads.");
+          '
+
       - name: Apply migrations
         env:
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}

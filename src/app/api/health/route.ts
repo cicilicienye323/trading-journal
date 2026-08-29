@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { db } from "@/db";
-import { env, resolveTrustedOrigins } from "@/env";
+import { databaseFingerprint, env, originOfRequest, resolveTrustedOrigins } from "@/env";
 
 // Never cache: the point of this route is to report live state.
 export const dynamic = "force-dynamic";
@@ -29,7 +29,7 @@ export const dynamic = "force-dynamic";
  * the URL in the address bar, and by reading `auth.migrationsApplied`. These
  * are public hostnames and a boolean — no secret is exposed.
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     await db.execute(sql`select 1`);
 
@@ -43,9 +43,17 @@ export async function GET() {
     return NextResponse.json({
       status: "ok",
       database: "reachable",
+      // Compare against the value the migrate-production workflow prints. Equal
+      // fingerprints mean both point at the same database; different ones mean
+      // the migration ran somewhere the app never reads, which looks exactly
+      // like "the migration silently did nothing".
+      databaseFingerprint: databaseFingerprint(env.DATABASE_URL),
       auth: {
         origin: env.BETTER_AUTH_URL,
-        trustedOrigins: resolveTrustedOrigins(env),
+        // The origin this very request arrived on. If it is absent from
+        // trustedOrigins below, that is the "Invalid origin" cause, stated.
+        requestOrigin: originOfRequest(request),
+        trustedOrigins: resolveTrustedOrigins(env, originOfRequest(request)),
         migrationsApplied: Boolean(rows[0]?.present),
       },
     });

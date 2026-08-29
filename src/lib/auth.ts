@@ -13,7 +13,7 @@ import { nextCookies } from "better-auth/next-js";
 
 import { db } from "@/db";
 import { account, session, user, verification } from "@/db/auth-schema";
-import { env, resolveTrustedOrigins } from "@/env";
+import { env, originOfRequest, resolveTrustedOrigins } from "@/env";
 
 /**
  * Minimum password length, in one place because it is enforced in two: Better
@@ -54,14 +54,15 @@ export const auth = betterAuth({
   baseURL: env.BETTER_AUTH_URL,
 
   // Better Auth rejects any request whose Origin header doesn't match one of
-  // these, and answers INVALID_ORIGIN — which the form shows as "Invalid
-  // origin". baseURL above contributes exactly one origin, but a Vercel
-  // deployment answers on several hostnames at once, so deriving only one of
-  // them makes sign-in fail on a page that otherwise renders fine.
+  // these and answers INVALID_ORIGIN, which the form shows as "Invalid origin".
   //
-  // See resolveTrustedOrigins for why enumerating these is safe and why a
-  // `*.vercel.app` wildcard would not be.
-  trustedOrigins: resolveTrustedOrigins(env),
+  // Takes the request so the origin it was actually served on is included.
+  // Vercel serves the project on a `<project>-<team>.vercel.app` alias that it
+  // publishes in no environment variable, so a list built purely from env vars
+  // provably misses the hostname people use. See resolveTrustedOrigins for why
+  // trusting the request's own origin is the standard CSRF check rather than a
+  // hole, and why a `*.vercel.app` wildcard would be one.
+  trustedOrigins: (request) => resolveTrustedOrigins(env, originOfRequest(request)),
 
   emailAndPassword: {
     enabled: true,
