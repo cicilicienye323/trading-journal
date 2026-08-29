@@ -52,11 +52,20 @@ jobs:
       # Cheapest gate first: a mistyped confirmation should cost nothing.
       # workflow_dispatch has no native "are you sure", and this workflow is one
       # click away from the one that targets a throwaway database in CI.
+      #
+      # The check runs unconditionally and fails inside, rather than being an
+      # `if:` on the step. With `if:`, the passing case renders as *skipped* in
+      # the run summary — and a guard that reads "skipped" is indistinguishable,
+      # to anyone auditing the run later, from a guard that never ran at all.
       - name: Check confirmation
-        if: inputs.confirm != 'migrate'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
         run: |
-          echo "::error::Confirmation was '${{ inputs.confirm }}', expected 'migrate'. Nothing ran."
-          exit 1
+          if [ "$CONFIRM" != "migrate" ]; then
+            echo "::error::Confirmation was '$CONFIRM', expected 'migrate'. Nothing ran."
+            exit 1
+          fi
+          echo "Confirmed."
 
       - uses: actions/checkout@v7
 
