@@ -544,3 +544,22 @@ describe("seed environment", () => {
     expect(out).toContain("Seed failed");
   }, 90000);
 });
+
+describe("vercel build configuration", () => {
+  // Reproduced against the real build: without the Vercel system env vars,
+  // `next build` dies collecting /api/health because src/env validates
+  // BETTER_AUTH_URL at module load. That is what failed on Vercel while CI
+  // stayed green — CI sets SKIP_ENV_VALIDATION and the Vercel build did not.
+  it("skips env validation during the build, as src/env documents", () => {
+    const cfg = JSON.parse(readFileSync("vercel.json", "utf8"));
+    expect(cfg.buildCommand).toContain("SKIP_ENV_VALIDATION=true");
+  });
+
+  it("does not disable validation at runtime", () => {
+    // Build-time only. Setting it as a project env var would silence the
+    // check on every server start, which is the opposite of the intent.
+    const cfg = JSON.parse(readFileSync("vercel.json", "utf8"));
+    expect(cfg.env?.SKIP_ENV_VALIDATION).toBeUndefined();
+    expect(cfg.build?.env?.SKIP_ENV_VALIDATION).toBeUndefined();
+  });
+});
