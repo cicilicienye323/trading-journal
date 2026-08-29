@@ -8,8 +8,15 @@
  *
  * The `healthcheck` table below is scaffolding: it exists so the migration
  * pipeline had something to prove itself against before any real modelling
- * started. `/api/health` still reads it, so delete it and that route together,
- * once you have real tables.
+ * started. Once you have real tables, drop the table — but **keep
+ * `/api/health`**. It no longer reads this table; it runs `select 1` and asks
+ * the catalog whether `user` exists, so it works fine without it. That route is
+ * load-bearing: CI's container smoke test, docker-compose's app healthcheck,
+ * `deploy-bootstrap.mjs`, and `migrate-production.yml` all poll it, and
+ * deleting it turns CI red for reasons that look nothing like the cause.
+ *
+ * Dropping the table means editing `scripts/seed.ts` in the same commit — it
+ * inserts a `healthcheck` row today and will not compile once this is gone.
  *
  * Naming trap, and it is a real one: Better Auth already owns a table called
  * `account` — it holds OAuth provider links and password hashes, nothing to do

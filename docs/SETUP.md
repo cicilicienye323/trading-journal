@@ -60,8 +60,15 @@ sama dengan Neon, supaya migrasi yang jalan di lokal pasti jalan di produksi.
 
 **`src/db/schema.ts`** — definisi tabel. **Ini yang kamu isi tiap proyek.**
 Isinya sekarang tabel `healthcheck` (biar pipeline migrasinya kebukti jalan —
-hapus bareng `/api/health` begitu tabel asli sudah ada) plus satu baris
+boleh dihapus begitu tabel asli sudah ada) plus satu baris
 `export * from "./auth-schema"`.
+
+> ⚠️ Hapus **tabelnya** saja, jangan route `/api/health`-nya. Route itu sudah
+> nggak baca tabel `healthcheck` — dia cuma `select 1` + ngecek katalog. Tapi CI,
+> docker-compose, `deploy-bootstrap.mjs`, dan `migrate-production.yml` semuanya
+> nembak route itu, jadi kalau dihapus CI-nya merah dengan error yang kelihatan
+> nggak nyambung sama sekali. Hapus tabelnya berarti update `scripts/seed.ts` di
+> commit yang sama juga.
 
 **`src/db/auth-schema.ts`** — 4 tabel Better Auth. Dipisah dari `schema.ts`
 justru supaya file yang kamu edit nggak pernah berisi hal yang nggak boleh kamu
