@@ -242,7 +242,12 @@ beforeAll(async () => {
   });
 
   protectedSrv = createServer((_req, res) => {
-    res.writeHead(403, { "Content-Type": "text/html" });
+    // Mirrors the live response: Attack Challenge Mode sets x-vercel-mitigated.
+    res.writeHead(403, {
+      "Content-Type": "text/html",
+      "x-vercel-mitigated": "challenge",
+      "x-vercel-challenge-token": "2.test.token",
+    });
     res.end("<html><body>Vercel Security Checkpoint</body></html>");
   });
   await new Promise((r) => protectedSrv.listen(0, "127.0.0.1", r));
@@ -489,17 +494,26 @@ describe("health verification", () => {
 describe("Vercel Deployment Protection", () => {
   it("stops polling immediately instead of retrying a challenge", () => {
     // 20 attempts at 5s would be 100s. Detecting it must short-circuit.
-    expect(healthProtected.output).toContain("Deployment Protection is blocking");
+    expect(healthProtected.output).toContain("is blocking this URL");
   });
 
-  it("explains that no automated check can pass, and where to turn it off", () => {
-    expect(healthProtected.output).toContain("Settings > Deployment Protection");
+  it("names Attack Challenge Mode and its Firewall setting, not Deployment Protection", () => {
+    // These are different screens. Naming the wrong one sends the user to a
+    // toggle that changes nothing — which is exactly what happened once.
+    expect(healthProtected.output).toContain("Attack Challenge Mode");
+    expect(healthProtected.output).toContain("Firewall");
+    expect(healthProtected.output).not.toContain("Settings > Deployment Protection");
+  });
+
+  it("names Deployment Protection for the SSO bounce", () => {
+    expect(healthSso.output).toContain("Deployment Protection");
+    expect(healthSso.output).toContain("Settings > Deployment Protection");
   });
 
   it("recognises the 302 bounce to vercel.com/sso on its own", () => {
     // Following the redirect lands on a vercel.com page, which would otherwise
     // look like an app returning the wrong body and get retried for 10 minutes.
-    expect(healthSso.output).toContain("Deployment Protection is blocking");
+    expect(healthSso.output).toContain("is blocking this URL");
     expect(healthSso.code).toBe(1);
   });
 

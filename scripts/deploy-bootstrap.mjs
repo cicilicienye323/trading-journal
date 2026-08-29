@@ -520,7 +520,9 @@ async function verify() {
   const interval = Number(process.env.HEALTH_INTERVAL_MS || 15000);
 
   info(`polling ${url}/api/health (builds take ~1-2 min)`);
-  let protectedByVercel = false;
+  // Which Vercel gate is in the way. They live in different settings screens,
+  // so naming the wrong one sends people to a toggle that changes nothing.
+  let blockedBy = null;
 
   for (let i = 0; i < attempts; i++) {
     try {
@@ -541,19 +543,27 @@ async function verify() {
         return true;
       }
 
-      // Deployment Protection has two shapes: a 401/403 HTML challenge, and a
-      // 302 to vercel.com/sso-api. Retrying clears neither, and both look like
-      // "app is down" unless named.
-      const ssoRedirect =
+      // Two different Vercel gates, two different settings screens. Retrying
+      // clears neither, and both look like "app is down" unless named.
+      //
+      // Deployment Protection bounces to Vercel SSO.
+      if (
         res.status >= 300 &&
         res.status < 400 &&
-        /vercel\.com\/sso/i.test(res.headers.get("location") || "");
+        /vercel\.com\/sso/i.test(res.headers.get("location") || "")
+      ) {
+        blockedBy = "deployment-protection";
+        break;
+      }
+      // Attack Challenge Mode serves an interstitial. The header is the
+      // unambiguous signal; the page title is only a fallback for when Vercel
+      // rewords it.
       if (
-        ssoRedirect ||
+        res.headers.get("x-vercel-mitigated") === "challenge" ||
         ((res.status === 401 || res.status === 403) &&
           /Vercel (Security|Authentication)/i.test(text))
       ) {
-        protectedByVercel = true;
+        blockedBy = "attack-challenge";
         break;
       }
 
@@ -566,12 +576,20 @@ async function verify() {
     await new Promise((r) => setTimeout(r, interval));
   }
 
-  if (protectedByVercel) {
-    warn("Vercel Deployment Protection is blocking this URL.");
-    info("Every request without a browser session gets an HTML challenge, so");
-    info("no automated check — this one, or an uptime monitor — can ever pass.");
-    info("A recruiter opening it in a browser would be challenged too.");
-    info("Turn it off: Vercel > project > Settings > Deployment Protection.");
+  if (blockedBy) {
+    const where =
+      blockedBy === "deployment-protection"
+        ? "Settings > Deployment Protection"
+        : "the project's Firewall tab > Attack Challenge Mode";
+    warn(
+      blockedBy === "deployment-protection"
+        ? "Vercel Deployment Protection is blocking this URL."
+        : "Vercel Attack Challenge Mode is blocking this URL.",
+    );
+    info("Every request without a browser session is challenged, so no");
+    info("automated check — this one, or an uptime monitor — can pass.");
+    info("A recruiter opening it gets the interstitial too.");
+    info(`Turn it off: Vercel > project > ${where}.`);
     return false;
   }
 
