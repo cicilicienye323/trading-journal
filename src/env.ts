@@ -44,10 +44,13 @@ export const serverSchema = z.object({
     z.string().url("BETTER_AUTH_URL must be a full URL including scheme").optional(),
   ),
 
-  // Populated by Vercel. Neither includes the protocol scheme.
+  // Populated by Vercel. None of them include the protocol scheme.
   VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
   VERCEL_URL: z.string().optional(),
   VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
+  // The branch alias, e.g. my-app-git-main-team.vercel.app. Stable per branch,
+  // unlike VERCEL_URL which changes on every push.
+  VERCEL_BRANCH_URL: z.string().optional(),
 
   // The read-only demo account. Mutations check against this so a visitor
   // clicking around can't wreck the data a recruiter sees next.
@@ -104,6 +107,44 @@ export function resolveAuthUrl(raw: RawEnv): string | undefined {
       : raw.VERCEL_URL;
 
   return host ? `https://${host}` : undefined;
+}
+
+/**
+ * Every origin this deployment may legitimately be browsed from.
+ *
+ * Why this exists, and it cost a round trip to learn: `resolveAuthUrl` picks
+ * exactly ONE origin, and Better Auth rejects any request whose `Origin` header
+ * doesn't match it — `INVALID_ORIGIN`, surfacing in the UI as "Invalid origin".
+ * But a Vercel deployment is reachable at up to three hostnames at once:
+ *
+ *   VERCEL_PROJECT_PRODUCTION_URL  the stable production alias people visit
+ *   VERCEL_BRANCH_URL             the per-branch alias
+ *   VERCEL_URL                    this specific deployment, changes every push
+ *
+ * So if any of those variables is missing at runtime — which is the case unless
+ * "Automatically expose System Environment Variables" is on — the single
+ * derived origin can easily be a hostname nobody is actually browsing, and
+ * every sign-in fails while the page itself renders perfectly.
+ *
+ * Listing all of them is not a loosening of CSRF protection: these are the
+ * hostnames Vercel itself reports for this deployment, not anything an attacker
+ * supplies. A wildcard like `*.vercel.app` WOULD be a hole — anyone can deploy
+ * there — which is exactly why this enumerates instead.
+ */
+export function resolveTrustedOrigins(raw: RawEnv): string[] {
+  const hosts = [raw.VERCEL_PROJECT_PRODUCTION_URL, raw.VERCEL_BRANCH_URL, raw.VERCEL_URL];
+
+  const origins = hosts
+    .filter((host): host is string => Boolean(host))
+    // Vercel omits the scheme; a bare host would never match an Origin header.
+    .map((host) => (host.includes("://") ? host : `https://${host}`));
+
+  // The explicit/derived base URL last, so it is present even when running
+  // somewhere Vercel's variables don't exist at all (local, Docker, Fly).
+  const authUrl = resolveAuthUrl(raw);
+  if (authUrl) origins.push(authUrl);
+
+  return [...new Set(origins.map((origin) => origin.replace(/\/+$/, "")))];
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseEnv } from "./env";
+import { parseEnv, resolveTrustedOrigins } from "./env";
 
 const VALID = {
   DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/fintech_dev",
@@ -137,5 +137,83 @@ describe("parseEnv", () => {
       // test exists to prevent.
       expect(message).toContain("BETTER_AUTH_URL");
     }
+  });
+});
+
+/**
+ * These pin the fix for a real production failure: sign-up on the live URL
+ * answered "Invalid origin" while the page itself rendered fine. Better Auth
+ * compares the browser's Origin header against an exact list, and deriving only
+ * one origin from a deployment that answers on three hostnames leaves the one
+ * people actually visit off that list.
+ */
+describe("resolveTrustedOrigins", () => {
+  it("trusts the production alias even when the base URL resolved elsewhere", () => {
+    // The exact shape of the bug: system env vars are exposed, but VERCEL_ENV
+    // is missing, so resolveAuthUrl falls back to the per-deployment VERCEL_URL
+    // while the user is browsing the stable production alias.
+    const origins = resolveTrustedOrigins({
+      VERCEL_URL: "trading-journal-abc123.vercel.app",
+      VERCEL_PROJECT_PRODUCTION_URL: "trading-journal-vcien.vercel.app",
+    } as never);
+
+    expect(origins).toContain("https://trading-journal-vcien.vercel.app");
+    expect(origins).toContain("https://trading-journal-abc123.vercel.app");
+  });
+
+  it("covers all three Vercel hostnames plus the resolved base URL", () => {
+    const origins = resolveTrustedOrigins({
+      VERCEL_ENV: "production",
+      VERCEL_URL: "app-abc123.vercel.app",
+      VERCEL_BRANCH_URL: "app-git-main.vercel.app",
+      VERCEL_PROJECT_PRODUCTION_URL: "app.vercel.app",
+    } as never);
+
+    expect(origins.sort()).toEqual([
+      "https://app-abc123.vercel.app",
+      "https://app-git-main.vercel.app",
+      "https://app.vercel.app",
+    ]);
+  });
+
+  it("adds the scheme Vercel omits", () => {
+    const origins = resolveTrustedOrigins({ VERCEL_URL: "x.vercel.app" } as never);
+    expect(origins).toEqual(["https://x.vercel.app"]);
+  });
+
+  it("works off-Vercel, where none of those variables exist", () => {
+    // Local dev, Docker, Fly. Without this the list would be empty and every
+    // request would be rejected.
+    const origins = resolveTrustedOrigins({ BETTER_AUTH_URL: "http://localhost:3000" } as never);
+    expect(origins).toEqual(["http://localhost:3000"]);
+  });
+
+  it("does not repeat an origin that is both derived and explicit", () => {
+    const origins = resolveTrustedOrigins({
+      VERCEL_ENV: "production",
+      VERCEL_PROJECT_PRODUCTION_URL: "app.vercel.app",
+      VERCEL_URL: "app.vercel.app",
+    } as never);
+
+    expect(origins).toEqual(["https://app.vercel.app"]);
+  });
+
+  it("normalises a trailing slash, which would never match an Origin header", () => {
+    // Origin headers have no path and no trailing slash, and the comparison is
+    // exact — so "https://app.com/" silently matches nothing.
+    const origins = resolveTrustedOrigins({ BETTER_AUTH_URL: "https://app.com/" } as never);
+    expect(origins).toEqual(["https://app.com"]);
+  });
+
+  it("never returns a wildcard", () => {
+    // "*.vercel.app" would make sign-in work everywhere — including from any
+    // other person's Vercel deployment, which is the CSRF hole this avoids.
+    const origins = resolveTrustedOrigins({
+      VERCEL_ENV: "production",
+      VERCEL_PROJECT_PRODUCTION_URL: "app.vercel.app",
+      VERCEL_URL: "app-abc.vercel.app",
+    } as never);
+
+    expect(origins.some((o) => o.includes("*"))).toBe(false);
   });
 });

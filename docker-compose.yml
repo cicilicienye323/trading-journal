@@ -15,7 +15,21 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: fintech_dev
     ports:
-      - "5432:5432"
+      # 127.0.0.1 is load-bearing, not tidiness. "5432:5432" binds 0.0.0.0 —
+      # every interface — and Docker writes its own iptables rules, so it goes
+      # around ufw/firewalld without asking. On any machine with a public IP
+      # that publishes a postgres/postgres database to the whole internet.
+      #
+      # This is not hypothetical: it happened to this project. The dev database
+      # was wiped by an automated scanner that dropped every database and left
+      # a "readme_to_recover" ransom note behind. Nothing of value was lost —
+      # the only tables were scaffolding — but the same one line on a machine
+      # holding real data is a very bad day.
+      #
+      # Bound to loopback, `npm run dev` and `npm run db:*` work exactly as
+      # before. If you genuinely need to reach the database from another
+      # machine, tunnel it: ssh -L 5432:localhost:5432 user@host
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -45,6 +59,13 @@ services:
       # Optional: pass through from the host if set, empty otherwise.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
+      # Left on all interfaces deliberately: the point of this service is to
+      # look at the app, sometimes from a phone or another machine on the LAN,
+      # and it serves no data a signed-out visitor couldn't get from the
+      # deployed site anyway. That is a different judgement from the database
+      # above, which should never be reachable off-box.
+      #
+      # Running this on a public VPS? Use "127.0.0.1:3000:3000" here too.
       - "3000:3000"
     healthcheck:
       # 127.0.0.1, not localhost: /etc/hosts maps localhost to both 127.0.0.1
