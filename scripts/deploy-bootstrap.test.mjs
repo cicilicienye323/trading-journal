@@ -62,13 +62,20 @@ function startMock() {
           connection_uris: neonUris.map((connection_uri) => ({ connection_uri })),
         });
 
-      // GitHub
-      if (p === "/user") return send(200, { login: "testuser" });
+      // GitHub. Actions' built-in GITHUB_TOKEN is an installation token: it
+      // cannot read /user, and answers 403 rather than 401. Reproduced here
+      // because that difference is what broke the first real workflow run.
+      if (p === "/user") {
+        if (req.headers.authorization === "Bearer gh-actions-installation-token")
+          return send(403, { message: "Resource not accessible by integration" });
+        return send(200, { login: "testuser" });
+      }
       if (p === "/repos/testuser/trading-journal") return send(404, { message: "Not Found" });
       if (p === "/user/repos" && req.method === "POST")
         return send(201, { name: "trading-journal" });
 
       // Vercel
+      if (p === "/v2/user") return send(200, { user: { username: "testuser" } });
       if (p === "/v9/projects/trading-journal") return send(404, { error: { code: "not_found" } });
       if (p === "/v11/projects" && req.method === "POST")
         return send(200, { id: "prj_test", name: "trading-journal", link: { repoId: 998877 } });
@@ -83,7 +90,7 @@ function startMock() {
 }
 
 /** Runs the real script against the mock; returns its output, state and requests. */
-function run({ skip = "push,migrate,seed,verify", env = {} } = {}) {
+function run({ skip = "push,migrate,seed,verify", env = {}, args = [] } = {}) {
   requests = [];
   const stateFile = join(scratch, `state-${++runNo}.json`);
   return new Promise((resolve) => {
@@ -100,6 +107,7 @@ function run({ skip = "push,migrate,seed,verify", env = {} } = {}) {
         // origin. The API calls around them are what this covers.
         "--skip",
         skip,
+        ...args,
       ],
       {
         encoding: "utf8",
@@ -118,9 +126,10 @@ function run({ skip = "push,migrate,seed,verify", env = {} } = {}) {
         timeout: 60000,
       },
       // A non-zero exit is not itself a failure; the assertions decide.
-      (_err, stdout, stderr) =>
+      (err, stdout, stderr) =>
         resolve({
           output: (stdout || "") + (stderr || ""),
+          code: err?.code ?? 0,
           state: existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {},
           requests,
         }),
@@ -134,6 +143,8 @@ let both;
 let directOnly;
 let ciRun;
 let noRepo;
+let preflightCI;
+let preflightBadGh;
 
 beforeAll(async () => {
   server = startMock();
@@ -157,7 +168,25 @@ beforeAll(async () => {
 
   // Same, but with nothing to derive the slug from.
   noRepo = await run({ skip: "github,push,migrate,seed,verify" });
-}, 120000);
+
+  // Exactly how the workflow's preflight step invokes it: --skip github, and
+  // Actions' installation token in the environment (which cannot read /user).
+  preflightCI = await run({
+    skip: "github,push,migrate,seed,verify",
+    args: ["--dry-run"],
+    env: {
+      GITHUB_TOKEN: "gh-actions-installation-token",
+      GITHUB_REPOSITORY: "testuser/trading-journal",
+    },
+  });
+
+  // Preflight when the github step really will run and its token is bad.
+  preflightBadGh = await run({
+    skip: "push,migrate,seed,verify",
+    args: ["--dry-run"],
+    env: { GITHUB_TOKEN: "gh-actions-installation-token" },
+  });
+}, 150000);
 
 afterAll(() => {
   server?.close();
@@ -292,6 +321,35 @@ describe("CI path (--skip github, as the deploy workflow runs it)", () => {
   it("fails loudly when the repo slug cannot be determined", () => {
     expect(find(noRepo.requests, "POST", "/v11/projects")).toBeUndefined();
     expect(noRepo.output).toContain("Don't know which GitHub repo");
+  });
+});
+
+describe("preflight (--dry-run)", () => {
+  // The first real workflow run died here: preflight checked GITHUB_TOKEN even
+  // though the run skipped the github step, and Actions' installation token
+  // answers 403 to /user. The job failed over a credential it never uses.
+  it("passes when the only bad token belongs to a skipped step", () => {
+    expect(preflightCI.code).toBe(0);
+    expect(preflightCI.output).toContain("not needed (--skip github)");
+    expect(preflightCI.output).toContain("Preflight clean");
+  });
+
+  it("never calls /user for a skipped github step", () => {
+    expect(find(preflightCI.requests, "GET", "/user")).toBeUndefined();
+  });
+
+  it("still validates the tokens it will actually use", () => {
+    expect(find(preflightCI.requests, "GET", "/api/v2/projects")).toBeDefined();
+    expect(find(preflightCI.requests, "GET", "/v2/user")).toBeDefined();
+  });
+
+  it("creates nothing — every request is a GET", () => {
+    expect(preflightCI.requests.every((r) => r.method === "GET")).toBe(true);
+  });
+
+  it("still fails when a token for a step that WILL run is rejected", () => {
+    expect(preflightBadGh.code).toBe(1);
+    expect(preflightBadGh.output).toContain("rejected (403)");
   });
 });
 

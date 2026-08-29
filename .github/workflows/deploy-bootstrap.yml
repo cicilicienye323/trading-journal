@@ -86,13 +86,16 @@ jobs:
         env:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          # Present only so the preflight can report on it; the repo already
-          # exists, so the github step is skipped in the real run below.
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          # --skip github must match the real run below. No GITHUB_TOKEN is
+          # passed at all: the repo already exists, and Actions' built-in token
+          # is an installation token that cannot call /user (403) or create a
+          # repo, so checking it would fail the job over a credential this
+          # workflow never uses.
           node scripts/deploy-bootstrap.mjs --dry-run \
             --name "${{ inputs.project_name }}" \
-            --region "${{ inputs.region }}"
+            --region "${{ inputs.region }}" \
+            --skip github
 
       - name: Provision and deploy
         if: ${{ !inputs.dry_run }}

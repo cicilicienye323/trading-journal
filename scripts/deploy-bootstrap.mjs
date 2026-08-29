@@ -498,31 +498,40 @@ async function verify() {
  */
 async function preflight() {
   let fatal = 0;
-  const check = async (label, url, token, hint, tokenScheme = "Bearer") => {
+  // Only a token the run will actually use can block the run. Checking a
+  // credential for a skipped step turns a non-problem into a hard failure.
+  const check = async (skipKey, label, url, token, hint) => {
     step(label);
+    if (SKIP.has(skipKey)) return info(`not needed (--skip ${skipKey})`);
     if (!token) {
       warn(`not set — ${hint}`);
       return void fatal++;
     }
-    const r = await api(url, { token, tokenScheme });
+    const r = await api(url, { token });
     if (r.res.ok) return ok(`token valid`);
     warn(`rejected (${r.status}) — ${hint}`);
     fatal++;
   };
 
   await check(
+    "neon",
     "Neon — NEON_API_KEY",
     `${NEON_API}/api/v2/projects`,
     process.env.NEON_API_KEY,
     "console.neon.tech > Settings > API keys",
   );
   await check(
+    "github",
     "GitHub — GITHUB_TOKEN",
     `${GITHUB_API}/user`,
     process.env.GITHUB_TOKEN,
-    "github.com/settings/tokens, needs repo create + contents write",
+    // Note: Actions' built-in GITHUB_TOKEN always fails this check with 403.
+    // It is an installation token, and /user is user-scoped only. That token
+    // cannot create a repo either, which is why CI skips this step entirely.
+    "github.com/settings/tokens — needs a user PAT, not Actions' GITHUB_TOKEN",
   );
   await check(
+    "vercel",
     "Vercel — VERCEL_TOKEN",
     `${VERCEL_API}/v2/user`,
     process.env.VERCEL_TOKEN,
