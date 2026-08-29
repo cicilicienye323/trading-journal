@@ -30,7 +30,8 @@
     "db:seed": "npm run seed",
     "fixtures": "tsx scripts/generate-fixtures.ts",
     "deploy:bootstrap": "node scripts/deploy-bootstrap.mjs",
-    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test"
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test",
+    "verify:decimals": "dotenv -e .env.local -- tsx scripts/verify-decimal-roundtrip.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",
