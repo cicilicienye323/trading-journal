@@ -205,6 +205,18 @@ export function databaseFingerprint(connectionString?: string): string | undefin
  * loopback — getting this wrong yields `http://…` where the browser sent
  * `https://…`, and the exact-match comparison fails just as silently as having
  * no entry at all.
+ *
+ * ⚠️ The return value is derived from request headers, so treat it as
+ * request-controlled. It is safe for the one thing it is used for — deciding
+ * that a request is same-origin, where a mismatch only ever rejects — because
+ * the attack needs a forged header AND the victim's cookies, and a browser can
+ * supply neither together: HTML forms cannot set headers at all, and `fetch`
+ * with a custom header triggers a CORS preflight this app never approves.
+ *
+ * It is NOT safe for building URLs. Do not use it for password-reset links,
+ * email content, redirects, or anything cached — those turn a forged header
+ * into a link pointing at the attacker's host, which is the classic
+ * host-header-injection bug. Use `env.BETTER_AUTH_URL` for anything you emit.
  */
 export function originOfRequest(request?: Request | null): string | undefined {
   if (!request) return undefined;
