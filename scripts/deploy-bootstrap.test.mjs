@@ -85,6 +85,8 @@ function startMock() {
       // Second GET of the project, after the deploy: carries the real alias.
       // Deliberately NOT "trading-journal.vercel.app" — that host belongs to
       // someone else, and guessing it is the bug this pins down.
+      if (p === "/v9/projects/prj_test" && req.method === "PATCH")
+        return send(200, { id: "prj_test", autoExposeSystemEnvs: true });
       if (p === "/v9/projects/prj_test")
         return send(200, {
           id: "prj_test",
@@ -340,6 +342,17 @@ describe("CI path (--skip github, as the deploy workflow runs it)", () => {
   it("fails loudly when the repo slug cannot be determined", () => {
     expect(find(noRepo.requests, "POST", "/v11/projects")).toBeUndefined();
     expect(noRepo.output).toContain("Don't know which GitHub repo");
+  });
+});
+
+describe("system environment variables", () => {
+  it("turns on autoExposeSystemEnvs", () => {
+    // BETTER_AUTH_URL is derived from VERCEL_PROJECT_PRODUCTION_URL at runtime.
+    // Without this the build is green and every request 500s on env validation.
+    const patch = both.requests.find(
+      (r) => r.method === "PATCH" && r.path === "/v9/projects/prj_test",
+    );
+    expect(patch?.body).toEqual({ autoExposeSystemEnvs: true });
   });
 });
 

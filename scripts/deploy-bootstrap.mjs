@@ -367,6 +367,23 @@ async function vercel() {
   state.vercelProjectId = project.id;
   saveState();
 
+  // BETTER_AUTH_URL is deliberately not set as an env var; the app derives it
+  // from VERCEL_PROJECT_PRODUCTION_URL / VERCEL_URL. Those only exist inside
+  // the deployment if system env vars are exposed. Without this the build
+  // succeeds and then every request 500s on env validation — a green deploy
+  // serving nothing, which is the most expensive kind of failure to diagnose.
+  const expose = await api(`${VERCEL_API}/v9/projects/${project.id}${teamQ}`, {
+    token,
+    method: "PATCH",
+    body: { autoExposeSystemEnvs: true },
+  });
+  if (expose.res.ok) ok("system environment variables exposed to the deployment");
+  else {
+    warn(`Could not enable system env vars (${expose.status}).`);
+    info("Set Settings > Environment Variables > Automatically expose System");
+    info("Environment Variables, or the app cannot derive BETTER_AUTH_URL.");
+  }
+
   // BETTER_AUTH_URL is intentionally absent: it is derived at runtime from
   // Vercel's own system env vars, so preview deploys get their own origin and
   // the session cookie always matches the host actually serving the app.
