@@ -158,6 +158,8 @@ let ciRun;
 let noRepo;
 let seedRun;
 let healthFails;
+let healthProtected;
+let protectedSrv;
 let preflightCI;
 let preflightBadGh;
 
@@ -215,6 +217,23 @@ beforeAll(async () => {
     },
   });
 
+  // A URL behind Vercel Deployment Protection: HTML challenge, never JSON.
+  // Retrying cannot clear it, so the poll must stop and say so.
+  protectedSrv = createServer((_req, res) => {
+    res.writeHead(403, { "Content-Type": "text/html" });
+    res.end("<html><body>Vercel Security Checkpoint</body></html>");
+  });
+  await new Promise((r) => protectedSrv.listen(0, "127.0.0.1", r));
+  healthProtected = await run({
+    skip: "github,push,migrate,seed",
+    env: {
+      GITHUB_REPOSITORY: "testuser/trading-journal",
+      PROD_URL: `http://127.0.0.1:${protectedSrv.address().port}`,
+      HEALTH_ATTEMPTS: "20",
+      HEALTH_INTERVAL_MS: "5000",
+    },
+  });
+
   // Preflight when the github step really will run and its token is bad.
   preflightBadGh = await run({
     skip: "push,migrate,seed,verify",
@@ -225,6 +244,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   server?.close();
+  protectedSrv?.close();
   if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -440,6 +460,21 @@ describe("health verification", () => {
 
   it("makes clear nothing is lost", () => {
     expect(healthFails.output).toContain("re-running reuses every resource");
+  });
+});
+
+describe("Vercel Deployment Protection", () => {
+  it("stops polling immediately instead of retrying a challenge", () => {
+    // 20 attempts at 5s would be 100s. Detecting it must short-circuit.
+    expect(healthProtected.output).toContain("Deployment Protection is blocking");
+  });
+
+  it("explains that no automated check can pass, and where to turn it off", () => {
+    expect(healthProtected.output).toContain("Settings > Deployment Protection");
+  });
+
+  it("still fails the run — a challenged URL is not a live one", () => {
+    expect(healthProtected.code).toBe(1);
   });
 });
 

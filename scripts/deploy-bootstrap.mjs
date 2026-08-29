@@ -520,14 +520,35 @@ async function verify() {
   const interval = Number(process.env.HEALTH_INTERVAL_MS || 15000);
 
   info(`polling ${url}/api/health (builds take ~1-2 min)`);
+  let protectedByVercel = false;
+
   for (let i = 0; i < attempts; i++) {
     try {
       const res = await fetch(`${url}/api/health`, { cache: "no-store" });
-      const body = await res.json().catch(() => null);
+      const text = await res.text();
+      let body = null;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        /* an HTML page, handled below */
+      }
+
       if (res.ok && body?.database === "reachable") {
         ok(`live: ${JSON.stringify(body)}`);
         return true;
       }
+
+      // Deployment Protection answers every non-browser request with an HTML
+      // challenge. Retrying cannot clear it, and it is not an app fault — but
+      // it looks identical to "app is down" unless it is named.
+      if (
+        (res.status === 401 || res.status === 403) &&
+        /Vercel (Security|Authentication)/i.test(text)
+      ) {
+        protectedByVercel = true;
+        break;
+      }
+
       if (res.status === 503) {
         info(`503 (database unreachable) — still building, or migrations did not run`);
       }
@@ -536,10 +557,20 @@ async function verify() {
     }
     await new Promise((r) => setTimeout(r, interval));
   }
+
+  if (protectedByVercel) {
+    warn("Vercel Deployment Protection is blocking this URL.");
+    info("Every request without a browser session gets an HTML challenge, so");
+    info("no automated check — this one, or an uptime monitor — can ever pass.");
+    info("A recruiter opening it in a browser would be challenged too.");
+    info("Turn it off: Vercel > project > Settings > Deployment Protection.");
+    return false;
+  }
+
   warn(`health check did not go green after ${attempts} attempts.`);
-  info(
-    "See the troubleshooting table in docs/FIRST-DEPLOY.md — start with 'migrations not applied'.",
-  );
+  info("Check the Vercel deployment itself first — a failed build serves nothing,");
+  info("and this poll cannot tell that apart from a healthy app with a bad database.");
+  info("Then see the troubleshooting table in docs/FIRST-DEPLOY.md.");
   return false;
 }
 
