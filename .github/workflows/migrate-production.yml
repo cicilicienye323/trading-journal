@@ -1,0 +1,95 @@
+name: Migrate production
+
+# Applies committed migrations to the production (Neon) database.
+#
+# Why this is a separate, manually-triggered workflow and not part of deploy:
+# a migration that runs automatically mid-deploy can be half-applied when the
+# build fails, and that is the hardest state to clean up. docs/DEPLOY.md §4
+# makes the same call. So this stays a deliberate, separate action — it just
+# no longer requires the production connection string to leave Neon.
+#
+# Why a workflow at all, rather than running drizzle-kit locally: the only
+# input is the production DATABASE_URL, and a database connection string is a
+# credential. Stored as a repository secret it is encrypted at rest, masked in
+# job output, and revocable from one screen — and it never has to be pasted
+# into a chat or an issue thread to get the migration done. Same reasoning as
+# deploy-bootstrap.yml.
+#
+# Required repository secret (Settings > Secrets and variables > Actions):
+#   PRODUCTION_DATABASE_URL   the POOLED Neon string — the host contains
+#                             "-pooler". See docs/DEPLOY.md §1.
+#
+# Run it from Actions > Migrate production > Run workflow.
+#
+# Safe to re-run: drizzle-kit records every applied migration in the
+# __drizzle_migrations table and skips the ones already there. Running it twice
+# is a no-op, not a double-apply.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "migrate" to confirm this writes to PRODUCTION'
+        required: true
+        default: ""
+
+# Two concurrent runs would race to apply the same migration.
+concurrency:
+  group: migrate-production
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Apply migrations to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # Cheapest gate first: a mistyped confirmation should cost nothing.
+      # workflow_dispatch has no native "are you sure", and this workflow is one
+      # click away from the one that targets a throwaway database in CI.
+      - name: Check confirmation
+        if: inputs.confirm != 'migrate'
+        run: |
+          echo "::error::Confirmation was '${{ inputs.confirm }}', expected 'migrate'. Nothing ran."
+          exit 1
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A missing secret would otherwise surface as drizzle.config.ts throwing
+      # "DATABASE_URL is not set", which reads like a code bug rather than a
+      # setup step nobody did.
+      - name: Check the secret exists
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::PRODUCTION_DATABASE_URL is not set. Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          # Warn, don't fail: a non-pooled string still migrates correctly. It
+          # is the serverless app that exhausts connections with one, and that
+          # is a different variable in a different place (Vercel).
+          case "$DATABASE_URL" in
+            *-pooler*) echo "Connection string is the pooled one." ;;
+            *) echo "::warning::This does not look like the pooled Neon string (no '-pooler' in the host). Fine for migrating; make sure Vercel's DATABASE_URL is the pooled one." ;;
+          esac
+
+      # Printed so the job log records what was applied, which is the audit
+      # trail you want when a column turns up missing in production later.
+      - name: List committed migrations
+        run: ls -1 src/db/migrations/*.sql
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        # The :ci variant, because there is no .env.local here.
+        run: npm run db:migrate:ci

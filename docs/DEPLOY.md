@@ -78,12 +78,43 @@ npm run db:generate      # bikin file SQL dari perubahan schema.ts
 # baca file SQL-nya. selalu. drizzle bisa salah nebak rename kolom.
 git add src/db/migrations && git commit
 npm run db:migrate       # terapkan ke lokal
-# setelah PR di-merge, terapkan ke production:
+```
+
+Terus **terapkan ke production** — dan ini langkah yang paling gampang kelupaan,
+karena deploy-nya tetap hijau tanpa itu. Yang gagal cuma request pertama yang
+nyentuh tabel baru.
+
+### Cara nerapin ke production
+
+**Lewat GitHub Actions (disarankan).** Actions → **Migrate production** → Run
+workflow → ketik `migrate` di kotak konfirmasi.
+
+Sekali doang, sebelum pertama kali dipakai: Settings → Secrets and variables →
+Actions → tambahin secret **`PRODUCTION_DATABASE_URL`** = connection string Neon
+yang **pooled**.
+
+Kenapa lewat workflow, bukan dijalanin di laptop: connection string produksi itu
+kredensial. Sebagai repository secret dia kesimpen terenkripsi, otomatis
+kesensor di log job, dan bisa dicabut dari satu layar — **dan nggak pernah perlu
+kamu tempel ke chat, issue, atau DM buat minta tolong orang lain jalanin.** Sama
+alasannya dengan `deploy-bootstrap.yml`.
+
+Aman diulang: drizzle nyatet tiap migrasi yang udah keterapin di tabel
+`__drizzle_migrations` dan nge-skip yang udah ada. Jalan dua kali = nggak ngapa-ngapain.
+
+**Kalau lebih suka manual**, dari laptop dengan repo ke-checkout:
+
+```bash
 DATABASE_URL="<neon-production-url>" npx drizzle-kit migrate
 ```
 
 Aturan yang bikin kamu nggak kehilangan data: **jangan pernah edit file migrasi
 yang sudah pernah dijalankan.** Bikin migrasi baru.
+
+> **Gejala kalau langkah ini kelupaan:** deploy hijau, halaman kebuka, tapi
+> begitu ada yang register/login muncul error `relation "user" does not exist`.
+> `/api/health` **tetap hijau** — dia cuma nembak `select 1`, nggak nyentuh tabel
+> mana pun. Jadi health check yang hijau **bukan** bukti migrasi udah jalan.
 
 ## 5. Jalur Go (Proyek 2)
 
