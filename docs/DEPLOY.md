@@ -87,7 +87,19 @@ nyentuh tabel baru.
 ### Cara nerapin ke production
 
 **Lewat GitHub Actions (disarankan).** Actions → **Migrate production** → Run
-workflow → ketik `migrate` di kotak konfirmasi.
+workflow → ketik `migrate` di kotak konfirmasi, dan **isi `app_url`** dengan URL
+app-mu (contoh `https://trading-journal-vcien.vercel.app`).
+
+> **Kenapa `app_url` layak diisi.** Kolom itu bikin workflow nanya ke app-mu
+> database mana yang dia baca, terus dibandingin sama yang mau dimigrasi. Kalau
+> beda, workflow-nya **gagal** dan nyebutin sebabnya.
+>
+> Ini nutup kegagalan yang paling nyebelin dan udah kejadian sekali di proyek
+> ini: workflow bilang **sukses**, tapi app tetap error "relation does not
+> exist" — karena secret-nya nunjuk database yang beda dari yang dibaca app.
+> Migrasi ke database yang nggak ada yang baca itu **nggak bisa dibedain** dari
+> migrasi yang diam-diam nggak ngapa-ngapain. Kosongin kolomnya cuma kalau
+> app-nya emang belum pernah ke-deploy.
 
 Sekali doang, sebelum pertama kali dipakai: Settings → Secrets and variables →
 Actions → tambahin secret **`PRODUCTION_DATABASE_URL`** = connection string Neon

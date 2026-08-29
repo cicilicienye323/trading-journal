@@ -32,6 +32,10 @@ on:
         description: 'Type "migrate" to confirm this writes to PRODUCTION'
         required: true
         default: ""
+      app_url:
+        description: "Deployed app URL — checks this run targets the database the app reads. Blank skips the check."
+        required: false
+        default: ""
 
 # Two concurrent runs would race to apply the same migration.
 concurrency:
@@ -99,17 +103,58 @@ jobs:
       # in /api/health answers "did I migrate the database the app reads?" in
       # one glance.
       - name: Fingerprint the target database
+        id: fingerprint
         env:
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
         run: |
           node -e '
             const { createHash } = require("node:crypto");
+            const fs = require("node:fs");
             const u = new URL(process.env.DATABASE_URL);
             const fp = createHash("sha256").update(`${u.host}${u.pathname}`).digest("hex").slice(0, 12);
             console.log(`databaseFingerprint: ${fp}`);
-            console.log("Compare with /api/health on the deployed app. If they differ,");
-            console.log("this workflow is migrating a database the app never reads.");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `value=${fp}\n`);
           '
+
+      # The check that would have saved a round trip. This workflow reported
+      # success while the app still had no tables, because the secret and
+      # Vercel's DATABASE_URL pointed at different databases — and a migration
+      # applied to a database nobody reads is indistinguishable from one that
+      # silently did nothing.
+      #
+      # Comparing fingerprints turns that into a failure with an explanation.
+      # Skipped when app_url is blank, which is the honest default: before the
+      # first deploy there is no app to ask.
+      - name: Check this is the database the app actually reads
+        if: inputs.app_url != ''
+        env:
+          APP_URL: ${{ inputs.app_url }}
+          EXPECTED: ${{ steps.fingerprint.outputs.value }}
+        run: |
+          url="${APP_URL%/}/api/health"
+          echo "Asking $url which database it reads..."
+          body=$(curl -fsS --max-time 20 "$url") || {
+            echo "::error::Could not reach $url. Check the URL, or leave app_url blank to skip this check."
+            exit 1
+          }
+
+          actual=$(printf '%s' "$body" | node -e '
+            let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+              try { console.log(JSON.parse(s).databaseFingerprint ?? "") } catch { console.log("") }
+            })
+          ')
+
+          if [ -z "$actual" ]; then
+            echo "::warning::$url did not report a databaseFingerprint — it is probably running a build from before this field existed. Skipping the check."
+            exit 0
+          fi
+
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::Fingerprint mismatch. This run would migrate $EXPECTED, but the app reads $actual — the migration would appear to succeed and change nothing the app can see. Point the PRODUCTION_DATABASE_URL secret at the same database as DATABASE_URL in your hosting provider, then re-run."
+            exit 1
+          fi
+
+          echo "Match ($actual) — this run targets the database the app reads."
 
       - name: Apply migrations
         env:
