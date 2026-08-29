@@ -24,9 +24,29 @@ import prettier from "eslint-config-prettier";
  * generator — it produces synthetic test data and never writes to these
  * columns, so float arithmetic is fine there. Page numbers and calendar
  * arithmetic are likewise unaffected.
+ *
+ * ── Why `lib/trades/**` and `lib/trading-accounts/**` are in the list ──
+ * They were not, and the gap was invisible: `parseFloat(input.grossProfit)` in
+ * `lib/trades/write-values.ts` — the module that maps every money value onto
+ * its column — passed `npm run lint` and all 239 tests. A rule that misses the
+ * write path is a rule that only looks like enforcement.
+ *
+ * This matters most for what lands next, not what is here now. Spec §8.2 puts
+ * `deriveRisk()` in `lib/trades/`, and that function divides and multiplies
+ * prices to fill `risk_amount` and `r_multiple`. Done in floats on ordinary FX
+ * values it yields 80.99999999999774 instead of 81.00, and an r_multiple of
+ * 1.000000000000028 — so a break-even trade compares as not equal to 1R, and
+ * Slice 3 groups on that. The directory needed the rule before the function
+ * arrives, not after.
  */
 const noFloatMoney = {
-  files: ["src/lib/schemas/**/*.ts", "src/lib/money.ts", "src/actions/**/*.ts"],
+  files: [
+    "src/lib/schemas/**/*.ts",
+    "src/lib/money.ts",
+    "src/lib/trades/**/*.ts",
+    "src/lib/trading-accounts/**/*.ts",
+    "src/actions/**/*.ts",
+  ],
   rules: {
     "no-restricted-syntax": [
       "error",
