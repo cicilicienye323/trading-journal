@@ -67,16 +67,20 @@ export async function importCsvAction(
   if (!parsed.ok) return { error: parsed.error };
 
   const target = { id: account.id, serverTimezone: account.serverTimezone };
-  const existingTickets = await findExistingTickets(
-    user.id,
-    account.id,
-    parsed.rows.map((row) => row.ticket),
-  );
 
   if (formData.get("step") !== "confirm") {
+    // Only the preview needs this. On confirm the answer would be stale by the
+    // time it mattered anyway — the unique index is what decides, and asking
+    // first would be one round trip spent on an opinion nobody reads.
+    const existingTickets = await findExistingTickets(
+      user.id,
+      account.id,
+      parsed.rows.map((row) => row.ticket),
+    );
+
     return {
       preview: buildPreview({
-        filename: file.name,
+        filename: filename(file),
         account: target,
         accountName: account.name,
         rows: parsed.rows,
@@ -98,7 +102,7 @@ export async function importCsvAction(
   const outcome = await runImport({
     userId: user.id,
     tradingAccountId: account.id,
-    filename: file.name,
+    filename: filename(file),
     rowCount: parsed.totalRows,
     values,
   });
@@ -119,4 +123,17 @@ export async function importCsvAction(
       accountName: account.name,
     },
   };
+}
+
+/**
+ * The filename, clipped to what `import_batches.filename` can hold.
+ *
+ * A file picker cannot produce a name longer than the filesystem's 255-byte
+ * limit, but a hand-built multipart request can, and `varchar(255)` answers an
+ * over-long value with an error rather than a truncation. One `slice` turns a
+ * 500 into a stored name — cheap, at the one boundary where the value is
+ * whatever the client said it was.
+ */
+function filename(file: File): string {
+  return file.name.slice(0, 255);
 }
