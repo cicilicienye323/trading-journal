@@ -38,11 +38,20 @@ import prettier from "eslint-config-prettier";
  * 1.000000000000028 — so a break-even trade compares as not equal to 1R, and
  * Slice 3 groups on that. The directory needed the rule before the function
  * arrives, not after.
+ *
+ * ── And why `lib/import/**` joined them in Slice 2 ──
+ * The same gap, one directory over. The CSV importer reads every money and
+ * price column in the application out of a text file, and `parseFloat(fields[12])`
+ * is the single most natural line to write there — it is how almost every CSV
+ * parser tutorial does it. The importer is also the path that will carry the
+ * most rows by far: a mistake in a form costs one trade, a mistake here costs
+ * every trade in the file.
  */
 const noFloatMoney = {
   files: [
     "src/lib/schemas/**/*.ts",
     "src/lib/money.ts",
+    "src/lib/import/**/*.ts",
     "src/lib/trades/**/*.ts",
     "src/lib/trading-accounts/**/*.ts",
     "src/actions/**/*.ts",
