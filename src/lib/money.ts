@@ -188,3 +188,205 @@ export function formatDecimal(value: string): string {
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return `${negative ? "-" : ""}${grouped}${fraction ? `.${fraction}` : ""}`;
 }
+
+/**
+ * Exposes the `numeric(p, s)` shape check to code outside Zod.
+ *
+ * The CSV importer has to answer the same question the form schemas ask —
+ * "will this string fit the column?" — but about a field in a file rather than
+ * a form input, so it needs a predicate rather than a `ZodType`. Sharing the
+ * pattern is the point: two hand-written regexes for the same column is how the
+ * importer ends up accepting a price the form rejects (or worse, one Postgres
+ * silently rounds).
+ */
+export function fitsDecimalColumn(value: string, precision: number, scale: number): boolean {
+  return decimalPattern(precision, scale).test(value);
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Exact decimal arithmetic
+ *
+ * The header of this file says a decimal stays a string and arithmetic happens
+ * in Postgres, and that "if Slice 3's statistics ever need exact arithmetic
+ * *outside* the database, that is the moment to add one, and this is the file
+ * it would go in". Slice 2 is that moment, one slice early.
+ *
+ * ── What forced it ──
+ * `trades.risk_amount` and `trades.r_multiple` are computed by the application,
+ * not by the database (spec §4.3), because the formula in §5.2 derives money
+ * per price point from the trade itself:
+ *
+ *     risk_amount = |open_price - stop_loss| * gross_profit / signedMove
+ *
+ * That is a division and a multiplication on prices, and it happens *before*
+ * the INSERT — there is no column to let Postgres compute. Done in doubles on
+ * ordinary FX values it produces 80.99999999999774 instead of 81.00 and an
+ * r_multiple of 1.000000000000028, so a trade that lost exactly its stop does
+ * not compare equal to −1R. Slice 3 then groups and averages those.
+ *
+ * ── Why BigInt rather than decimal.js or big.js ──
+ * The whole requirement is fixed-point add/subtract/multiply/divide with a
+ * chosen scale and one rounding rule. `BigInt` is in the language, weighs
+ * nothing in the bundle, and cannot silently fall back to a float the way a
+ * library's `toNumber()` can. A dependency would also have to be kept in sync
+ * with the rounding Postgres actually applies, which is the one behaviour that
+ * matters here — so we implement that rule directly and test it.
+ *
+ * ── The rounding rule ──
+ * Half away from zero, which is what Postgres `numeric` does: 0.125 → 0.13 and
+ * −0.125 → −0.13. Banker's rounding (JavaScript's `toFixed` is neither) would
+ * disagree with the database on exactly the values that land on a boundary, and
+ * a journal that disagrees with its own stored numbers is worse than one that
+ * is uniformly slightly off.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * A fixed-point decimal. The value is `units / 10 ** scale`.
+ *
+ * Keeping `scale` alongside the digits rather than normalising to a single
+ * global scale is what lets "1.50" stay two decimal places through an addition:
+ * trailing zeros are information in a price, and the column scales differ
+ * (prices are `numeric(18,5)`, money is `numeric(18,2)`).
+ */
+export type Decimal = { readonly units: bigint; readonly scale: number };
+
+const DECIMAL_SHAPE = /^-?\d+(\.\d+)?$/;
+
+/**
+ * Parses a decimal string into exact digits.
+ *
+ * Throws rather than returning null on malformed input: every caller in this
+ * app validates the string first (`decimalString`, `fitsDecimalColumn`, or the
+ * CSV row validator), so reaching here with garbage is a programming error, and
+ * a silent `null` would propagate as a missing value instead of a stack trace.
+ */
+export function toDecimal(value: string): Decimal {
+  const text = value.trim();
+  if (!DECIMAL_SHAPE.test(text)) throw new Error(`not a decimal string: ${JSON.stringify(value)}`);
+
+  const negative = text.startsWith("-");
+  const [whole, fraction = ""] = (negative ? text.slice(1) : text).split(".");
+  const units = BigInt(whole + fraction);
+
+  // `-0.00` parses to units 0n, which is the same value as `0` — there is no
+  // negative zero here, and `decimalToString` therefore never emits one.
+  return { units: negative ? -units : units, scale: fraction.length };
+}
+
+/** Renders exact digits back to the string form a `numeric` column stores. */
+export function decimalToString(value: Decimal): string {
+  const negative = value.units < 0n;
+  const digits = (negative ? -value.units : value.units).toString().padStart(value.scale + 1, "0");
+  const cut = digits.length - value.scale;
+  const fraction = value.scale > 0 ? `.${digits.slice(cut)}` : "";
+  return `${negative ? "-" : ""}${digits.slice(0, cut)}${fraction}`;
+}
+
+/** `0` at the given scale — the starting point for a sum. */
+export function zeroDecimal(scale = 0): Decimal {
+  return { units: 0n, scale };
+}
+
+/** −1, 0 or 1. Used to classify a trade as loss, breakeven or win (§5.3). */
+export function decimalSign(value: Decimal): -1 | 0 | 1 {
+  if (value.units === 0n) return 0;
+  return value.units < 0n ? -1 : 1;
+}
+
+export function absDecimal(value: Decimal): Decimal {
+  return value.units < 0n ? { units: -value.units, scale: value.scale } : value;
+}
+
+export function negateDecimal(value: Decimal): Decimal {
+  return { units: -value.units, scale: value.scale };
+}
+
+/** Brings both operands to a common scale so their digits line up. */
+function align(a: Decimal, b: Decimal): { left: bigint; right: bigint; scale: number } {
+  const scale = Math.max(a.scale, b.scale);
+  return {
+    left: a.units * 10n ** BigInt(scale - a.scale),
+    right: b.units * 10n ** BigInt(scale - b.scale),
+    scale,
+  };
+}
+
+/** Exact — the result's scale is the wider of the two inputs. */
+export function addDecimals(a: Decimal, b: Decimal): Decimal {
+  const { left, right, scale } = align(a, b);
+  return { units: left + right, scale };
+}
+
+/** Exact. */
+export function subtractDecimals(a: Decimal, b: Decimal): Decimal {
+  const { left, right, scale } = align(a, b);
+  return { units: left - right, scale };
+}
+
+/** Exact — scales add, as they do on paper. No rounding happens here. */
+export function multiplyDecimals(a: Decimal, b: Decimal): Decimal {
+  return { units: a.units * b.units, scale: a.scale + b.scale };
+}
+
+/** Three-way comparison of two `Decimal`s. */
+export function compareDecimalValues(a: Decimal, b: Decimal): -1 | 0 | 1 {
+  const { left, right } = align(a, b);
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+/** The larger of two values — the running peak of an equity curve (§5.3). */
+export function maxDecimal(a: Decimal, b: Decimal): Decimal {
+  return compareDecimalValues(a, b) >= 0 ? a : b;
+}
+
+/**
+ * Division, rounded to `scale`. Returns `null` when the divisor is zero.
+ *
+ * `null` rather than a thrown error or `Infinity`, because every divisor in
+ * this app can legitimately be zero and each case has a defined answer in the
+ * spec: a breakeven trade has no R (§5.2), and a set with no losing trades has
+ * an undefined profit factor that §5.3 says to render as "—" and explicitly
+ * says not to return as 0. A nullable return makes the caller decide, which is
+ * what those rules require.
+ */
+export function divideDecimals(a: Decimal, b: Decimal, scale: number): Decimal | null {
+  if (b.units === 0n) return null;
+
+  // a / b at the target scale is (a.units * 10^(scale + b.scale - a.scale)) / b.units.
+  // When that exponent is negative the shift belongs on the divisor instead —
+  // BigInt has no fractional powers, and moving it keeps everything integral.
+  const shift = scale + b.scale - a.scale;
+  const numerator = shift >= 0 ? a.units * 10n ** BigInt(shift) : a.units;
+  const denominator = shift >= 0 ? b.units : b.units * 10n ** BigInt(-shift);
+
+  return { units: roundedQuotient(numerator, denominator), scale };
+}
+
+/** Changes a value's scale, rounding half away from zero when narrowing. */
+export function rescaleDecimal(value: Decimal, scale: number): Decimal {
+  if (scale === value.scale) return value;
+  if (scale > value.scale) {
+    return { units: value.units * 10n ** BigInt(scale - value.scale), scale };
+  }
+  return { units: roundedQuotient(value.units, 10n ** BigInt(value.scale - scale)), scale };
+}
+
+/**
+ * Integer division rounding half **away from zero**, matching Postgres.
+ *
+ * Signs are stripped first so there is one rule instead of two: with negatives
+ * left in place, `-5n / 2n` truncates toward zero to `-2n` while `5n / 2n`
+ * gives `2n`, and "add one if the remainder is at least half" then rounds
+ * −2.5 to −2 and 2.5 to 3 — asymmetric, and wrong on exactly the boundary
+ * values this function exists to get right.
+ */
+function roundedQuotient(numerator: bigint, denominator: bigint): bigint {
+  const negative = numerator < 0n !== denominator < 0n;
+  const n = numerator < 0n ? -numerator : numerator;
+  const d = denominator < 0n ? -denominator : denominator;
+
+  const quotient = n / d;
+  const rounded = (n % d) * 2n >= d ? quotient + 1n : quotient;
+  return negative ? -rounded : rounded;
+}

@@ -8,7 +8,22 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { compareDecimals, decimalString, formatDecimal, isPositiveDecimal } from "./money";
+import {
+  addDecimals,
+  compareDecimals,
+  decimalSign,
+  decimalString,
+  decimalToString,
+  divideDecimals,
+  fitsDecimalColumn,
+  formatDecimal,
+  isPositiveDecimal,
+  maxDecimal,
+  multiplyDecimals,
+  rescaleDecimal,
+  subtractDecimals,
+  toDecimal,
+} from "./money";
 
 const money = decimalString({ precision: 18, scale: 2, label: "Amount" });
 const price = decimalString({ precision: 18, scale: 5, positiveOnly: true, label: "Price" });
@@ -125,5 +140,114 @@ describe("formatDecimal", () => {
     // Intl.NumberFormat would need a number and would drop this trailing zero.
     expect(formatDecimal("0.10")).toBe("0.10");
     expect(formatDecimal("12345678901234.99")).toBe("12,345,678,901,234.99");
+  });
+});
+
+/**
+ * The exact-arithmetic half of the module.
+ *
+ * The value of these tests is concentrated in the rounding: `deriveRisk` in
+ * `lib/trades/risk.ts` divides prices, and whether it agrees with Postgres to
+ * the last digit is decided entirely by what happens at a boundary like 0.125.
+ * Every other operation here is exact by construction, so the tests mostly
+ * pin the *scale* — that adding two-decimal money does not silently widen, and
+ * that a price keeps the trailing zeros the broker wrote.
+ */
+describe("toDecimal / decimalToString", () => {
+  it("round-trips a value unchanged, trailing zeros included", () => {
+    // "2112.80" must not come back as "2112.8": the digit count is the
+    // instrument's precision, which is information about the symbol.
+    for (const value of ["0", "0.00", "2112.80", "-33.92", "1.06172", "-0.5"]) {
+      expect(decimalToString(toDecimal(value))).toBe(value);
+    }
+  });
+
+  it("has no negative zero", () => {
+    // -0.00 and 0.00 are the same value, and a "-0.00" in a P&L column would
+    // read as a loss that is not one.
+    expect(decimalToString(toDecimal("-0.00"))).toBe("0.00");
+    expect(decimalSign(toDecimal("-0.00"))).toBe(0);
+  });
+
+  it("refuses anything that is not a plain decimal string", () => {
+    // Scientific notation is the realistic one: a spreadsheet turns 0.1 into
+    // "1e-1", and `Number()` would happily accept it while `numeric` would not.
+    for (const value of ["", "1e-1", "1,5", "abc", "1.2.3", "+1", " "]) {
+      expect(() => toDecimal(value)).toThrow();
+    }
+  });
+});
+
+describe("addDecimals / subtractDecimals / multiplyDecimals", () => {
+  it("adds money exactly where a float would not", () => {
+    // 0.1 + 0.2 === 0.30000000000000004 in doubles. This is the entire reason
+    // the module exists, in one assertion.
+    expect(decimalToString(addDecimals(toDecimal("0.1"), toDecimal("0.2")))).toBe("0.3");
+  });
+
+  it("keeps the wider scale of the two operands", () => {
+    expect(decimalToString(addDecimals(toDecimal("1.00"), toDecimal("2.5")))).toBe("3.50");
+    expect(decimalToString(subtractDecimals(toDecimal("1.08500"), toDecimal("1.08")))).toBe(
+      "0.00500",
+    );
+  });
+
+  it("adds the scales when multiplying, as on paper", () => {
+    expect(decimalToString(multiplyDecimals(toDecimal("1.05"), toDecimal("2.0")))).toBe("2.100");
+  });
+});
+
+describe("divideDecimals", () => {
+  it("rounds half away from zero, the way Postgres numeric does", () => {
+    // Both signs, because rounding negatives toward zero instead is the
+    // classic asymmetry — it would make a losing trade's R differ from a
+    // winning one's by a last digit for no reason.
+    expect(decimalToString(divideDecimals(toDecimal("1"), toDecimal("8"), 2)!)).toBe("0.13");
+    expect(decimalToString(divideDecimals(toDecimal("-1"), toDecimal("8"), 2)!)).toBe("-0.13");
+    expect(decimalToString(divideDecimals(toDecimal("5"), toDecimal("2"), 0)!)).toBe("3");
+    expect(decimalToString(divideDecimals(toDecimal("-5"), toDecimal("2"), 0)!)).toBe("-3");
+  });
+
+  it("returns null on a zero divisor rather than throwing or returning 0", () => {
+    // §5.3 is explicit that a profit factor with no losing trades is not 0.
+    expect(divideDecimals(toDecimal("1.00"), toDecimal("0.00"), 4)).toBeNull();
+  });
+
+  it("divides correctly when the result needs fewer digits than the inputs", () => {
+    // The `shift < 0` branch: dividing a scale-7 numerator down to scale 2 is
+    // exactly what `deriveRisk` does, and getting the shift on the wrong side
+    // would be off by a factor of 100000.
+    expect(decimalToString(divideDecimals(toDecimal("1.0000000"), toDecimal("4"), 2)!)).toBe(
+      "0.25",
+    );
+  });
+});
+
+describe("rescaleDecimal", () => {
+  it("widens without rounding and narrows with it", () => {
+    expect(decimalToString(rescaleDecimal(toDecimal("1.5"), 3))).toBe("1.500");
+    expect(decimalToString(rescaleDecimal(toDecimal("1.005"), 2))).toBe("1.01");
+    expect(decimalToString(rescaleDecimal(toDecimal("-1.005"), 2))).toBe("-1.01");
+  });
+});
+
+describe("maxDecimal", () => {
+  it("compares across different scales", () => {
+    // The equity curve's running peak compares values that arrived from
+    // different columns, so a scale-blind comparison would pick wrongly.
+    expect(decimalToString(maxDecimal(toDecimal("10.5"), toDecimal("10.50")))).toBe("10.5");
+    expect(decimalToString(maxDecimal(toDecimal("9.99"), toDecimal("10.0")))).toBe("10.0");
+    expect(decimalToString(maxDecimal(toDecimal("-1.00"), toDecimal("-2")))).toBe("-1.00");
+  });
+});
+
+describe("fitsDecimalColumn", () => {
+  it("mirrors the column definition on both sides", () => {
+    // Postgres rounds an over-long fraction silently but errors on an
+    // over-long integer part. Both are refused here so neither surprises.
+    expect(fitsDecimalColumn("1.06172", 18, 5)).toBe(true);
+    expect(fitsDecimalColumn("1.061725", 18, 5)).toBe(false);
+    expect(fitsDecimalColumn("-33.92", 18, 2)).toBe(true);
+    expect(fitsDecimalColumn("1234567890123", 12, 2)).toBe(false);
   });
 });
