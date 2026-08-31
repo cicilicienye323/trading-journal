@@ -61,19 +61,21 @@ Cek `http://localhost:3000/api/health` — harus balas
 
 ## Perintah
 
-| Perintah              | Gunanya                                               |
-| --------------------- | ----------------------------------------------------- |
-| `npm run dev`         | Server development                                    |
-| `npm run verify`      | Format + lint + typecheck + test (sama kayak CI)      |
-| `npm run test:watch`  | Test mode watch                                       |
-| `npm run up` / `down` | Start/stop seluruh stack (app + DB) di Docker         |
-| `npm run db:up/down`  | Start/stop Postgres lokal doang                       |
-| `npm run db:generate` | Bikin file migrasi dari perubahan `schema.ts`         |
-| `npm run db:migrate`  | Terapkan migrasi                                      |
-| `npm run db:push`     | Dorong schema langsung, tanpa file migrasi (dev only) |
-| `npm run db:studio`   | GUI buat lihat isi database                           |
-| `npm run seed`        | Isi data demo                                         |
-| `npm run fixtures`    | Regenerate CSV demo MT5                               |
+| Perintah                  | Gunanya                                               |
+| ------------------------- | ----------------------------------------------------- |
+| `npm run dev`             | Server development                                    |
+| `npm run verify`          | Format + lint + typecheck + test (sama kayak CI)      |
+| `npm run test:watch`      | Test mode watch                                       |
+| `npm run up` / `down`     | Start/stop seluruh stack (app + DB) di Docker         |
+| `npm run db:up/down`      | Start/stop Postgres lokal doang                       |
+| `npm run db:generate`     | Bikin file migrasi dari perubahan `schema.ts`         |
+| `npm run db:migrate`      | Terapkan migrasi                                      |
+| `npm run db:push`         | Dorong schema langsung, tanpa file migrasi (dev only) |
+| `npm run db:studio`       | GUI buat lihat isi database                           |
+| `npm run seed`            | Isi data demo                                         |
+| `npm run fixtures`        | Regenerate CSV demo MT5                               |
+| `npm run verify:decimals` | Buktiin desimal selamat bolak-balik ke Postgres       |
+| `npm run verify:import`   | Buktiin import CSV idempoten (butuh DB jalan)         |
 
 > **`db:push` vs `db:migrate`.** `db:push` nyamain schema database sama
 > `schema.ts` tanpa bikin file migrasi — enak buat iterasi cepat di awal, tapi
@@ -96,6 +98,8 @@ src/
     migrations/     # SQL hasil generate, di-commit
   lib/
     fx/             # data referensi FX + generator data demo
+    import/         # parseCsv(), validateRow(), toUtc()  ← murni, ada test
+    money.ts        # aritmetika desimal eksak (BigInt), nol float
   env.ts            # validasi environment variable
 scripts/            # seed + generator fixture
 services/
@@ -204,6 +208,60 @@ Yang bikin ini gampang salah: `docker compose` nulis variable kosong sebagai
 **string kosong**, bukan "nggak ada". Zod `.optional()` cuma nangani yang kedua.
 Tanpa penanganan khusus, `docker compose up` di mesin tanpa API key bakal bikin
 app mati waktu boot. Ada test khusus buat kasus ini di `src/env.test.ts`.
+
+### Import CSV: satu format, ditolak tegas kalau nggak cocok
+
+MT4 dan MT5 punya banyak bentuk export — HTML statement, XLSX, CSV, beda-beda
+antar build broker. Parser yang nelen semuanya itu jebakan scope. v1 nerima
+**satu** format: export _History_ MT5 sebagai CSV, kolomnya persis 13 dan
+urutannya persis. Nggak ada auto-detect delimiter, nggak ada mapping kolom
+kustom, nggak ada format kedua.
+
+**Header dibaca posisional, bukan per nama.** Header MT5 punya nama dobel:
+`Time` di kolom 0 dan 8, `Price` di kolom 5 dan 9. Bikin map dari nama ke nilai
+itu baris pertama yang kelihatan wajar dan diam-diam bikin `close_price` jadi
+`open_price` — 180 baris masuk tanpa satu error pun, dan semua statistiknya
+salah.
+
+**Header salah = seluruh file ditolak. Baris salah = baris itu di-skip.**
+Bedanya disengaja: baris kotor berarti file yang bentuknya benar tapi datanya
+berantakan, dan maksa user benerin file dulu itu UX yang buruk — tiap baris yang
+dilewati dilaporin lengkap sama nomor barisnya. Header yang salah berarti
+filenya bukan format ini sama sekali, dan mengimpor separuhnya lebih buruk
+daripada nggak mengimpor sama sekali.
+
+**Impor ulang file yang sama itu no-op.** `trades (trading_account_id,
+external_ticket)` unik, dan insert-nya `ON CONFLICT DO NOTHING` di dalam satu
+transaksi bareng baris `import_batches`-nya. Impor kedua nampilin
+"0 imported, 180 duplicates skipped".
+
+### Commission dari MT itu negatif — ditambahkan, bukan dikurangi
+
+`net_profit = gross_profit + commission + swap`. MT4/MT5 nulis commission
+sebagai angka negatif karena itu biaya. Refleks orang yang pertama kali parsing
+statement MT adalah menguranginya, yang bikin biayanya kehitung dua kali dan
+tiap hasil jadi lebih jelek dari kenyataan. Di repo ini `net_profit` itu kolom
+`GENERATED ALWAYS AS`, jadi Postgres yang ngitung dan kode aplikasi secara
+struktural nggak bisa salah ngitungnya.
+
+### R-multiple diturunkan dari trade-nya sendiri, bukan dari tabel contract size
+
+`moneyPerPricePoint = gross_profit / signedMove` — tiap trade sudah bawa P&L
+realized dan jarak harganya, dan rasionya persis nilai uang per satuan harga di
+volume itu. Efeknya: jalan buat symbol apa pun, broker apa pun, tanpa satu baris
+data referensi yang bisa basi.
+
+**Batasnya:** karena diturunkan dari `gross_profit`, rumus ini mengasumsikan P&L
+linier terhadap harga — bener buat FX/CFD di volume tetap. Commission itu biaya
+tetap yang nggak ikut skala, tapi pembilang R pakai `net_profit`. Artinya trade
+yang sangat kecil R-nya sedikit pesimis. Trade-off yang disengaja: nggak butuh
+data referensi > akurasi sempurna di trade mikro.
+
+Aritmetikanya `BigInt` fixed-point di `src/lib/money.ts`, bukan float. Di
+`double` rumus ini ngeluarin 80.99999999999774 buat risiko 81.00 dan r_multiple
+1.000000000000028 — trade yang rugi persis satu R jadi nggak sama dengan −1R,
+dan statistik Slice 3 ngelompokin di atas angka itu. Aturan "nggak ada float di
+jalur uang" ditegakin ESLint, bukan diinget-inget.
 
 ### Fixture dicek ulang di CI
 

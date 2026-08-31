@@ -35,6 +35,7 @@ import { SignOutButton } from "./sign-out-button";
 const NAV = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/trades", label: "Trades" },
+  { href: "/import", label: "Import" },
   { href: "/accounts", label: "Accounts" },
 ] as const;
 

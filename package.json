@@ -31,7 +31,8 @@
     "fixtures": "tsx scripts/generate-fixtures.ts",
     "deploy:bootstrap": "node scripts/deploy-bootstrap.mjs",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test",
-    "verify:decimals": "dotenv -e .env.local -- tsx scripts/verify-decimal-roundtrip.ts"
+    "verify:decimals": "dotenv -e .env.local -- tsx scripts/verify-decimal-roundtrip.ts",
+    "verify:import": "dotenv -e .env.local -- tsx scripts/verify-import-roundtrip.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",
