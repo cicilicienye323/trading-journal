@@ -81,20 +81,26 @@ function zonedParts(instant: Date, timeZone: string): Record<string, string> {
  *
  *  - **Spring forward (nonexistent time).** `Europe/Athens` jumps 03:00 → 04:00
  *    on the last Sunday of March, so "2026-03-29T03:30" names a moment that
- *    never happened. `fromZonedTime` resolves it by applying the pre-transition
- *    offset, landing on 01:30 UTC = 04:30 local. It does not throw.
+ *    never happened. `fromZonedTime` resolves it by applying the *post*-
+ *    transition offset (+03), landing on 00:30 UTC = 02:30 local — just before
+ *    the gap. It does not throw.
  *  - **Fall back (ambiguous time).** In late October, 03:30 local happens twice.
- *    `fromZonedTime` picks the first (still-DST) reading.
+ *    `fromZonedTime` picks the second, standard-time reading (+02).
+ *
+ * Both directions are *measured*, not reasoned about — `time.test.ts` asserts
+ * them, and an earlier version of this comment described the opposite for both.
+ * A library's behaviour in the two hours a year where the mapping is not a
+ * function is exactly the thing to pin with a test rather than a paragraph.
  *
  * Both are documented rather than rejected because for *manual entry* a
  * defined, deterministic answer beats an error the user cannot act on — they
  * are transcribing a time their terminal displayed, and a nonexistent one means
  * a typo, which the resolved value makes visible on the detail page.
  *
- * The CSV importer is where this stops being good enough: a file can contain
- * thousands of rows and an ambiguous hour genuinely needs a rule (spec §6.5).
- * That decision belongs to Slice 2. The tests in `time.test.ts` pin the current
- * behaviour so that slice starts from a known state instead of a guess.
+ * The CSV importer needed a decision here rather than an inheritance, because a
+ * file can contain thousands of rows (spec §6.5). Slice 2 made it: `lib/import/
+ * time.ts` keeps this resolution instead of rejecting the row, and explains
+ * why. The tests below are what that decision was built on.
  */
 export function zonedInputToUtc(naive: string, timeZone: string): Date {
   return fromZonedTime(naive, timeZone);
