@@ -11,6 +11,7 @@
  */
 import type { trades } from "@/db/schema";
 import type { TradeInput } from "@/lib/schemas/trade";
+import { deriveRisk } from "@/lib/trades/risk";
 import { zonedInputToUtc } from "@/lib/trades/time";
 
 /**
@@ -58,6 +59,19 @@ export function toTradeWriteValues(input: TradeInput, timeZone: string): TradeWr
 
     setupTag: input.setupTag,
     notes: input.notes,
+
+    // Derived on every write, including edits — spec §4.3 makes these
+    // application-computed columns. Recomputing rather than preserving matters
+    // on update: correcting a stop loss that was typed wrong must move the R
+    // with it, and a stale r_multiple is worse than none because it still
+    // averages into Slice 3's statistics looking like a real measurement.
+    //
+    // Added in Slice 2 alongside the importer. Filling these for imported
+    // trades but not for typed ones would leave the same journal with two kinds
+    // of trade — one with R, one without — and the coverage figure the
+    // dashboard shows would measure how the data arrived rather than how much
+    // of it had a stop.
+    ...deriveRisk(input),
 
     // Typed here rather than imported from a form field: this action is the
     // manual-entry path by definition. The CSV importer sets "import" in Slice
